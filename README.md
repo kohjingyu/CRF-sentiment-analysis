@@ -8,6 +8,8 @@ Directory structure should look like the following. The `Evaluation_Script` and 
 
 ```
 CRF_FinalProject.ipynb
+DesignChallenge.py
 Evaluation_Script/
 data/
+models/
 ```
