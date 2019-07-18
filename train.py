@@ -1,19 +1,21 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 import torch.optim as optim
 from pathlib import Path
 import sys
 import os
 import matplotlib.pyplot as plt
+from models import *
 
 data_dir = Path("data/")
-output_model_dir = Path("models/")
+output_model_dir = Path("checkpoint/")
 if not os.path.exists(output_model_dir):
     os.mkdir(output_model_dir)
 use_cuda = torch.cuda.is_available()
 device = torch.device('cuda' if use_cuda else 'cpu')
+models_set = ['baseline']  # What models are available
+model_choice = 0  # Choice of model, tallies with models_set
 
 
 class POSTrainDataset(Dataset):
@@ -132,42 +134,6 @@ class POSEvalDataset(Dataset):
         return torch.Tensor(data).long(), torch.Tensor(target).long()
 
 
-class BaseLineBLSTM(nn.Module):
-    '''
-    Baseline Bi-directional LSTM Model to check what we expect to see when using a Bi-directional LSTM
-    Inputs:
-        vocab_size (int): size of vocabulary
-        embedding_dim (int): size of embedding layer
-        hidden_dim (int): size of hidden_dim for LSTM
-        n_layers (int): number of LSTM to stack
-        tagset_size (int): size of output space (number of tags)
-    '''
-
-    def __init__(self, vocab_size, embedding_dim, hidden_dim, n_layers, tagset_size):
-        super(BaseLineBLSTM, self).__init__()
-        self.hidden_dim = hidden_dim
-        self.word_embed = nn.Embedding(vocab_size, embedding_dim)
-        self.lstm = nn.LSTM(embedding_dim, hidden_dim,
-                            n_layers, bidirectional=True)
-        self.hiddentotag = nn.Linear(hidden_dim*2, tagset_size)
-
-    def forward(self, x):
-        embeds = self.word_embed(x)
-        lstm_out, _ = self.lstm(embeds)
-        tag_space = self.hiddentotag(lstm_out)
-        tag_scores = F.log_softmax(tag_space, dim=1)
-        return tag_scores
-
-
-class OSCAR(nn.Module):
-
-    def __init__(self):
-        pass
-
-    def forward(self, x):
-        pass
-
-
 def train(train_loader, model, optimizer, criterion, device):
     # Set model to training mode
     model.train()
@@ -189,6 +155,7 @@ def train(train_loader, model, optimizer, criterion, device):
         optimizer.step()
     return total_loss/len(train_loader)
 
+
 def eval(eval_loader, model, criterion, device):
     # Set model to eval mode
     model.eval()
@@ -207,7 +174,7 @@ def eval(eval_loader, model, criterion, device):
 
             # Get predictions
             output = model(data)
-            output = output.transpose(1,2)
+            output = output.transpose(1, 2)
             # Calculate Loss
             loss = criterion(output, target)
             total_loss += loss.item()
@@ -216,19 +183,11 @@ def eval(eval_loader, model, criterion, device):
                 total_constituents += 1
                 if pred[0][i].item() == target[0][i].item():
                     total_correct += 1
-            
+
     return total_loss/len(eval_loader), total_correct/total_constituents
 
-def main():
-    # Hyper Parameters
-    EMBEDDING_SIZE = 256
-    HIDDEN_DIM = 256
-    N_LAYERS = 2
-    LEARNING_RATE = 1e-4
-    MOMENTUM = 0.9
-    WEIGHT_DECAY = 1e-5
-    EPOCHS = 100
 
+def main():
     # Criterion to for loss
     criterion = nn.NLLLoss()
 
@@ -236,39 +195,81 @@ def main():
     posdataset = POSTrainDataset(data_dir)
     train_loader = DataLoader(posdataset)
 
-    # Define Baseline Model
-    baselinemodel = BaseLineBLSTM(
-        len(posdataset.wtoi), EMBEDDING_SIZE, HIDDEN_DIM, N_LAYERS, len(posdataset.ttoi))
-    baselinemodel.to(device)
-    # Set up optimizer for Baseline Model
-    optimizer = optim.SGD(baselinemodel.parameters(
-    ), lr=LEARNING_RATE, momentum=MOMENTUM, weight_decay=WEIGHT_DECAY)
+    if model_choice == 0:
+        # Hyper Parameters
+        EMBEDDING_SIZE = 256
+        HIDDEN_DIM = 256
+        N_LAYERS = 2
+        LEARNING_RATE = 1e-3
+        MOMENTUM = 0.9
+        WEIGHT_DECAY = 1e-5
+        EPOCHS = 2000
+        # Define Baseline Model
+        baselinemodel = BaseLineBLSTM(
+            len(posdataset.wtoi), EMBEDDING_SIZE, HIDDEN_DIM, N_LAYERS, len(posdataset.ttoi))
+        baselinemodel.to(device)
+        # Set up optimizer for Baseline Model
+        optimizer = optim.SGD(baselinemodel.parameters(
+        ), lr=LEARNING_RATE, momentum=MOMENTUM, weight_decay=WEIGHT_DECAY)
 
     # Init Eval Dataset
     poseval = POSEvalDataset(data_dir, posdataset.wtoi, posdataset.ttoi)
     eval_loader = DataLoader(poseval)
 
+    # Implement Early stop
+    early_stop = 0
+
     # Baseline model training and eval
     best_loss = sys.maxsize
     train_losses = []
     eval_losses = []
+    eval_accuracies = []
     for epoch in range(1, EPOCHS+1):
-        trainloss = train(train_loader, baselinemodel, optimizer, criterion, device)
+        trainloss = train(train_loader, baselinemodel,
+                          optimizer, criterion, device)
         train_losses.append(trainloss)
         loss, accuracy = eval(eval_loader, baselinemodel, criterion, device)
-        print('Epoch {}, Training Loss: {}, Evaluation Loss: {}, Evaluation Accuracy: {}'.format(epoch, trainloss, loss, accuracy))
-        
+        eval_losses.append(loss)
+        eval_accuracies.append(accuracy)
+        print('Epoch {}, Training Loss: {}, Evaluation Loss: {}, Evaluation Accuracy: {}'.format(
+            epoch, trainloss, loss, accuracy))
+
+        # Check if current loss is better than previous
         if loss < best_loss:
             best_loss = loss
             torch.save(baselinemodel, output_model_dir /
-                       'baseline-{}.pt'.format(loss))
+                       '{}.pt'.format(models_set[model_choice]))
+            early_stop = 0
 
+        # If loss has stagnate, early stop
+        else:
+            early_stop += 1
+            if early_stop >= 2:
+                print('Early Stopping')
+                break
+        break
+
+    # Plot respective graphs for visualisation
     plt.figure()
-    plt.title('Base Line Model Training')
+    plt.title('{} Model Training'.format(models_set[model_choice]))
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
     plt.plot(train_losses)
-    plt.savefig('BaselineTraining.png')
+    plt.savefig('{}Training.png'.format(models_set[model_choice]))
+
+    plt.figure()
+    plt.title('{} Model Evaluation'.format(models_set[model_choice]))
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.plot(eval_losses)
+    plt.savefig('{}EvalLoss.png'.format(models_set[model_choice]))
+
+    plt.figure()
+    plt.title('{} Model Evaluation'.format(models_set[model_choice]))
+    plt.xlabel('Epoch')
+    plt.ylabel('Accuracy')
+    plt.plot(eval_accuracies)
+    plt.savefig('{}EvalAcc.png'.format(models_set[model_choice]))
 
 
 if __name__ == '__main__':
