@@ -15,7 +15,8 @@ if not os.path.exists(output_model_dir):
 use_cuda = torch.cuda.is_available()
 device = torch.device('cuda' if use_cuda else 'cpu')
 
-class POSDataset(Dataset):
+
+class POSTrainDataset(Dataset):
     '''
     Part Of Speech Tagging Train Dataset
     Inputs:
@@ -69,13 +70,67 @@ class POSDataset(Dataset):
                     self.dataset.append((data, target))
                     data = []
                     target = []
-        
+
     def __len__(self):
         return len(self.dataset)
 
     def __getitem__(self, idx):
         data, target = self.dataset[idx]
         return torch.Tensor(data).long(), torch.Tensor(target).long()
+
+
+class POSEvalDataset(Dataset):
+    '''
+    Part Of Speech Tagging Evalutaion Dataset
+    Inputs:
+        path (Path object or str): path on the local directory to the dataset to load from.
+        train_wtoi (dict): Dictionary to map word to index
+        train_ttoi (dict): Dictionary to map tag to index
+        dataset_choice (str): 'EN' or 'ES', defaults to 'EN'
+    '''
+
+    def __init__(self, path, train_wtoi, train_ttoi, dataset_choice='EN'):
+        self.path = path
+        self.dataset_choice = dataset_choice
+        self.wtoi = train_wtoi
+        self.ttoi = train_ttoi
+        self.dataset = []
+
+        with open(self.path / self.dataset_choice / 'dev.out', encoding="utf-8") as f:
+            data = []
+            target = []
+            for line in f:
+                # Strip newline
+                formatted_line = line.strip()
+                # Only process lines that are not newlines
+                if len(formatted_line) > 0:
+                    # Split into (x, y) pair
+                    split_data = formatted_line.split(" ")
+                    x, y = split_data[0].lower(), split_data[1]
+
+                    # Add index of word and index of tag into data and target
+                    # Check if word in vocab
+                    if x in self.wtoi:
+                        # Add index of word if it exist in vocab
+                        data.append(self.wtoi[x])
+                    else:
+                        # Add index of UNK if it does not
+                        data.append(self.wtoi['UNK'])
+                    target.append(self.ttoi[y])
+
+                else:
+                    # End of sentence
+                    self.dataset.append((data, target))
+                    data = []
+                    target = []
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, idx):
+        data, target = self.dataset[idx]
+        return torch.Tensor(data).long(), torch.Tensor(target).long()
+
 
 class BaseLineBLSTM(nn.Module):
     '''
@@ -92,15 +147,17 @@ class BaseLineBLSTM(nn.Module):
         super(BaseLineBLSTM, self).__init__()
         self.hidden_dim = hidden_dim
         self.word_embed = nn.Embedding(vocab_size, embedding_dim)
-        self.lstm = nn.LSTM(embedding_dim, hidden_dim, n_layers, bidirectional=True)
+        self.lstm = nn.LSTM(embedding_dim, hidden_dim,
+                            n_layers, bidirectional=True)
         self.hiddentotag = nn.Linear(hidden_dim*2, tagset_size)
-    
+
     def forward(self, x):
         embeds = self.word_embed(x)
         lstm_out, _ = self.lstm(embeds)
         tag_space = self.hiddentotag(lstm_out)
         tag_scores = F.log_softmax(tag_space, dim=1)
         return tag_scores
+
 
 class OSCAR(nn.Module):
 
@@ -109,6 +166,7 @@ class OSCAR(nn.Module):
 
     def forward(self, x):
         pass
+
 
 def train(train_loader, model, optimizer, criterion, device):
     # Set model to training mode
@@ -122,7 +180,7 @@ def train(train_loader, model, optimizer, criterion, device):
 
         # Get predictions from output
         output = model(data)
-        output = output.transpose(1,2)
+        output = output.transpose(1, 2)
         # Calculate loss
         loss = criterion(output, target)
         total_loss += loss.item()
@@ -131,6 +189,35 @@ def train(train_loader, model, optimizer, criterion, device):
         optimizer.step()
     return total_loss/len(train_loader)
 
+def eval(eval_loader, model, criterion, device):
+    # Set model to eval mode
+    model.eval()
+
+    # Counters
+    total_loss = 0
+    total_correct = 0
+    total_constituents = 0
+
+    # Iterate evaluluation data
+    # Set no grad
+    with torch.no_grad():
+        for data, target in eval_loader:
+            # Send data and target to device (cuda if cuda is available)
+            data, target = data.to(device), target.to(device)
+
+            # Get predictions
+            output = model(data)
+            output = output.transpose(1,2)
+            # Calculate Loss
+            loss = criterion(output, target)
+            total_loss += loss.item()
+            pred = output.argmax(dim=1)
+            for i in range(len(pred)):
+                total_constituents += 1
+                if pred[0][i].item() == target[0][i].item():
+                    total_correct += 1
+            
+    return total_loss/len(eval_loader), total_correct/total_constituents
 
 def main():
     # Hyper Parameters
@@ -140,36 +227,47 @@ def main():
     LEARNING_RATE = 1e-4
     MOMENTUM = 0.9
     WEIGHT_DECAY = 1e-5
-    EPOCHS = 30
+    EPOCHS = 100
 
     # Criterion to for loss
     criterion = nn.NLLLoss()
 
-    # Init Dataset
-    posdataset = POSDataset(data_dir)
+    # Init Train Dataset
+    posdataset = POSTrainDataset(data_dir)
     train_loader = DataLoader(posdataset)
 
     # Define Baseline Model
-    baselinemodel = BaseLineBLSTM(len(posdataset.wtoi), EMBEDDING_SIZE, HIDDEN_DIM, N_LAYERS, len(posdataset.ttoi))
+    baselinemodel = BaseLineBLSTM(
+        len(posdataset.wtoi), EMBEDDING_SIZE, HIDDEN_DIM, N_LAYERS, len(posdataset.ttoi))
     baselinemodel.to(device)
     # Set up optimizer for Baseline Model
-    optimizer = optim.SGD(baselinemodel.parameters(), lr=LEARNING_RATE, momentum=MOMENTUM, weight_decay=WEIGHT_DECAY)
+    optimizer = optim.SGD(baselinemodel.parameters(
+    ), lr=LEARNING_RATE, momentum=MOMENTUM, weight_decay=WEIGHT_DECAY)
 
-    # Baseline model training
+    # Init Eval Dataset
+    poseval = POSEvalDataset(data_dir, posdataset.wtoi, posdataset.ttoi)
+    eval_loader = DataLoader(poseval)
+
+    # Baseline model training and eval
     best_loss = sys.maxsize
-    losses = []
+    train_losses = []
+    eval_losses = []
     for epoch in range(1, EPOCHS+1):
-        loss = train(train_loader, baselinemodel, optimizer, criterion, device)
-        losses.append(loss)
+        trainloss = train(train_loader, baselinemodel, optimizer, criterion, device)
+        train_losses.append(trainloss)
+        loss, accuracy = eval(eval_loader, baselinemodel, criterion, device)
+        print('Epoch {}, Training Loss: {}, Evaluation Loss: {}, Evaluation Accuracy: {}'.format(epoch, trainloss, loss, accuracy))
+        
         if loss < best_loss:
             best_loss = loss
-            torch.save(baselinemodel, output_model_dir / 'baseline-{}.pt'.format(loss))
+            torch.save(baselinemodel, output_model_dir /
+                       'baseline-{}.pt'.format(loss))
 
     plt.figure()
     plt.title('Base Line Model Training')
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
-    plt.plot(losses)
+    plt.plot(train_losses)
     plt.savefig('BaselineTraining.png')
 
 
