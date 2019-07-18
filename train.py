@@ -5,6 +5,7 @@ import torch.optim as optim
 from pathlib import Path
 import sys
 import os
+import random
 import matplotlib.pyplot as plt
 from models import *
 
@@ -24,9 +25,10 @@ class POSTrainDataset(Dataset):
     Inputs:
         path (Path object or str): path on the local directory to the dataset to load from.
         dataset_choice (str): 'EN' or 'ES', defaults to 'EN'
+        split (float): Between 0 - 1, indicates size of train set where 1-split is the size of validation set
     '''
 
-    def __init__(self, path, dataset_choice='EN'):
+    def __init__(self, path, dataset_choice='EN', split=0.8):
         self.path = path
         self.dataset_choice = dataset_choice
         self.itow = {0: 'UNK'}  # Dict to map index to word
@@ -34,6 +36,7 @@ class POSTrainDataset(Dataset):
         self.itot = {}  # Dict to map index to tag
         self.ttoi = {}  # Dict to map tag to index
         self.dataset = []
+        self.train = True
 
         # Counters to keep track of last used index for mapping
         word_ctr = 1
@@ -73,64 +76,22 @@ class POSTrainDataset(Dataset):
                     data = []
                     target = []
 
-    def __len__(self):
-        return len(self.dataset)
-
-    def __getitem__(self, idx):
-        data, target = self.dataset[idx]
-        return torch.Tensor(data).long(), torch.Tensor(target).long()
-
-
-class POSEvalDataset(Dataset):
-    '''
-    Part Of Speech Tagging Evalutaion Dataset
-    Inputs:
-        path (Path object or str): path on the local directory to the dataset to load from.
-        train_wtoi (dict): Dictionary to map word to index
-        train_ttoi (dict): Dictionary to map tag to index
-        dataset_choice (str): 'EN' or 'ES', defaults to 'EN'
-    '''
-
-    def __init__(self, path, train_wtoi, train_ttoi, dataset_choice='EN'):
-        self.path = path
-        self.dataset_choice = dataset_choice
-        self.wtoi = train_wtoi
-        self.ttoi = train_ttoi
-        self.dataset = []
-
-        with open(self.path / self.dataset_choice / 'dev.out', encoding="utf-8") as f:
-            data = []
-            target = []
-            for line in f:
-                # Strip newline
-                formatted_line = line.strip()
-                # Only process lines that are not newlines
-                if len(formatted_line) > 0:
-                    # Split into (x, y) pair
-                    split_data = formatted_line.split(" ")
-                    x, y = split_data[0].lower(), split_data[1]
-
-                    # Add index of word and index of tag into data and target
-                    # Check if word in vocab
-                    if x in self.wtoi:
-                        # Add index of word if it exist in vocab
-                        data.append(self.wtoi[x])
-                    else:
-                        # Add index of UNK if it does not
-                        data.append(self.wtoi['UNK'])
-                    target.append(self.ttoi[y])
-
-                else:
-                    # End of sentence
-                    self.dataset.append((data, target))
-                    data = []
-                    target = []
+        # Shuffle data and split into train and val
+        random.shuffle(self.dataset)
+        self.train_data = self.dataset[:int(len(self.dataset)*split)]
+        self.val_data = self.dataset[int(len(self.dataset)*split):]
 
     def __len__(self):
-        return len(self.dataset)
+        if self.train:
+            return len(self.train_data)
+        else:
+            return len(self.val_data)
 
     def __getitem__(self, idx):
-        data, target = self.dataset[idx]
+        if self.train:
+            data, target = self.train_data[idx]
+        else:
+            data, target = self.val_data[idx]
         return torch.Tensor(data).long(), torch.Tensor(target).long()
 
 
@@ -193,17 +154,17 @@ def main():
 
     # Init Train Dataset
     posdataset = POSTrainDataset(data_dir)
-    train_loader = DataLoader(posdataset)
+    loader = DataLoader(posdataset)
 
     if model_choice == 0:
         # Hyper Parameters
-        EMBEDDING_SIZE = 256
-        HIDDEN_DIM = 256
+        EMBEDDING_SIZE = 512
+        HIDDEN_DIM = 512
         N_LAYERS = 2
         LEARNING_RATE = 1e-3
         MOMENTUM = 0.9
         WEIGHT_DECAY = 1e-5
-        EPOCHS = 2000
+        EPOCHS = 200
         # Define Baseline Model
         baselinemodel = BaseLineBLSTM(
             len(posdataset.wtoi), EMBEDDING_SIZE, HIDDEN_DIM, N_LAYERS, len(posdataset.ttoi))
@@ -211,10 +172,6 @@ def main():
         # Set up optimizer for Baseline Model
         optimizer = optim.SGD(baselinemodel.parameters(
         ), lr=LEARNING_RATE, momentum=MOMENTUM, weight_decay=WEIGHT_DECAY)
-
-    # Init Eval Dataset
-    poseval = POSEvalDataset(data_dir, posdataset.wtoi, posdataset.ttoi)
-    eval_loader = DataLoader(poseval)
 
     # Implement Early stop
     early_stop = 0
@@ -225,10 +182,14 @@ def main():
     eval_losses = []
     eval_accuracies = []
     for epoch in range(1, EPOCHS+1):
-        trainloss = train(train_loader, baselinemodel,
+        # Toggle Train set
+        posdataset.train = True
+        trainloss = train(loader, baselinemodel,
                           optimizer, criterion, device)
         train_losses.append(trainloss)
-        loss, accuracy = eval(eval_loader, baselinemodel, criterion, device)
+        # Toggle Validation Set
+        posdataset.train = False
+        loss, accuracy = eval(loader, baselinemodel, criterion, device)
         eval_losses.append(loss)
         eval_accuracies.append(accuracy)
         print('Epoch {}, Training Loss: {}, Evaluation Loss: {}, Evaluation Accuracy: {}'.format(
@@ -244,10 +205,9 @@ def main():
         # If loss has stagnate, early stop
         else:
             early_stop += 1
-            if early_stop >= 2:
+            if early_stop >= 5:
                 print('Early Stopping')
                 break
-        break
 
     # Plot respective graphs for visualisation
     plt.figure()
