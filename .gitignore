@@ -2,3 +2,5 @@ Evaluation_Script/
 data/
 *.pdf
 .ipynb_checkpoints
+checkpoint/
+*.png
