@@ -15,8 +15,8 @@ if not os.path.exists(output_model_dir):
     os.mkdir(output_model_dir)
 use_cuda = torch.cuda.is_available()
 device = torch.device('cuda' if use_cuda else 'cpu')
-models_set = ['baseline']  # What models are available
-model_choice = 0  # Choice of model, tallies with models_set
+models_set = ['baseline', 'seq2seq']  # What models are available
+model_choice = 1  # Choice of model, tallies with models_set
 
 
 class POSTrainDataset(Dataset):
@@ -166,17 +166,34 @@ def main():
         WEIGHT_DECAY = 1e-5
         EPOCHS = 200
         # Define Baseline Model
-        baselinemodel = BaseLineBLSTM(
+        model = BaseLineBLSTM(
             len(posdataset.wtoi), EMBEDDING_SIZE, HIDDEN_DIM, N_LAYERS, len(posdataset.ttoi))
-        baselinemodel.to(device)
+        model.to(device)
         # Set up optimizer for Baseline Model
-        optimizer = optim.SGD(baselinemodel.parameters(
+        optimizer = optim.SGD(model.parameters(
+        ), lr=LEARNING_RATE, momentum=MOMENTUM, weight_decay=WEIGHT_DECAY)
+
+    elif model_choice == 1:
+        # Hyper Parameters
+        EMBEDDING_SIZE = 512
+        HIDDEN_DIM = 512
+        N_LAYERS = 2
+        LEARNING_RATE = 1e-3
+        MOMENTUM = 0.9
+        WEIGHT_DECAY = 1e-5
+        EPOCHS = 200
+        # Define Seq2Seq Model
+        model = Seq2Seq(
+            len(posdataset.wtoi), EMBEDDING_SIZE, HIDDEN_DIM, N_LAYERS, len(posdataset.ttoi))
+        model.to(device)
+        # Set up optimizer for Seq2Seq Model
+        optimizer = optim.SGD(model.parameters(
         ), lr=LEARNING_RATE, momentum=MOMENTUM, weight_decay=WEIGHT_DECAY)
 
     # Implement Early stop
     early_stop = 0
 
-    # Baseline model training and eval
+    # Model training and eval
     best_loss = sys.maxsize
     train_losses = []
     eval_losses = []
@@ -184,12 +201,12 @@ def main():
     for epoch in range(1, EPOCHS+1):
         # Toggle Train set
         posdataset.train = True
-        trainloss = train(loader, baselinemodel,
+        trainloss = train(loader, model,
                           optimizer, criterion, device)
         train_losses.append(trainloss)
         # Toggle Validation Set
         posdataset.train = False
-        loss, accuracy = eval(loader, baselinemodel, criterion, device)
+        loss, accuracy = eval(loader, model, criterion, device)
         eval_losses.append(loss)
         eval_accuracies.append(accuracy)
         print('Epoch {}, Training Loss: {}, Evaluation Loss: {}, Evaluation Accuracy: {}'.format(
@@ -198,7 +215,7 @@ def main():
         # Check if current loss is better than previous
         if loss < best_loss:
             best_loss = loss
-            torch.save(baselinemodel, output_model_dir /
+            torch.save(model, output_model_dir /
                        '{}.pt'.format(models_set[model_choice]))
             early_stop = 0
 

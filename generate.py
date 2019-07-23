@@ -11,8 +11,8 @@ data_dir = Path("data/")
 model_dir = Path("checkpoint/")
 use_cuda = torch.cuda.is_available()
 device = torch.device('cuda' if use_cuda else 'cpu')
-models_set = ['baseline']  # What models are available
-model_choice = 0  # Choice of model, tallies with models_set
+models_set = ['baseline', 'seq2seq']  # What models are available
+model_choice = 1  # Choice of model, tallies with models_set
 
 
 class POSTrainDataset(Dataset):
@@ -149,15 +149,14 @@ if __name__ == '__main__':
     # Init Train Dataset for vocab
     posdataset = POSTrainDataset(data_dir)
 
-    if model_choice == 0:
-        # Load baseline
-        baselinemodel = torch.load(model_dir / 'baseline.pt', map_location=device)
-        baselinemodel.to(device)
+    # Load model
+    model = torch.load(model_dir / '{}.pt'.format(models_set[model_choice]), map_location=device)
+    model.to(device)
 
     posgendata = POSGenDataset(data_dir, posdataset.wtoi, posdataset.ttoi)
     gen_loader = DataLoader(posgendata)
 
-    gen_tag = generate(gen_loader, baselinemodel, device)
+    gen_tag = generate(gen_loader, model, device)
     ctr = 0
     with open('dev.p5.out', 'w') as f:
         for sentence in gen_tag:
