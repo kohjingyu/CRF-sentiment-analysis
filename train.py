@@ -180,6 +180,8 @@ def eval(eval_loader, model, criterion, device):
 
 
 def main():
+    EPOCHS = 500
+
     # Init Train Dataset
     posdataset = POSTrainDataset(data_dir)
     loader = DataLoader(posdataset)
@@ -187,6 +189,7 @@ def main():
     # Criterion to for loss
     weighted_loss = torch.ones(len(posdataset.ttoi))
     weighted_loss[posdataset.ttoi['O']] = 0.1
+    weighted_loss = weighted_loss.to(device)
     criterion = nn.CrossEntropyLoss(weight=weighted_loss)
 
     if model_choice == 0:
@@ -197,7 +200,6 @@ def main():
         LEARNING_RATE = 1e-3
         MOMENTUM = 0.9
         WEIGHT_DECAY = 1e-5
-        EPOCHS = 200
         # Define Baseline Model
         model = BaseLineBLSTM(
             len(posdataset.wtoi), EMBEDDING_SIZE, HIDDEN_DIM, N_LAYERS, len(posdataset.ttoi))
@@ -208,13 +210,12 @@ def main():
 
     elif model_choice == 1:
         # Hyper Parameters
-        EMBEDDING_SIZE = 512
-        HIDDEN_DIM = 512
+        EMBEDDING_SIZE = 256
+        HIDDEN_DIM = 256
         N_LAYERS = 2
         LEARNING_RATE = 1e-3
         MOMENTUM = 0.9
         WEIGHT_DECAY = 1e-5
-        EPOCHS = 200
         # Define Seq2Seq Model
         model = Seq2Seq(
             len(posdataset.wtoi), EMBEDDING_SIZE, HIDDEN_DIM, N_LAYERS, len(posdataset.ttoi))
