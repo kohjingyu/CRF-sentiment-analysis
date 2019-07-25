@@ -18,6 +18,7 @@ ttoi_file = 'ttoi.txt'
 itot_file = 'itot.txt'
 wtoi_file = 'wtoi.txt'
 
+
 class POSGenDataset(Dataset):
     '''
     Part Of Speech Tagging Dataset for Generation
@@ -81,6 +82,7 @@ def generate(gen_loader, model, device):
             gen_tag.append(pred)
     return gen_tag
 
+
 if __name__ == '__main__':
     # Open indexing files
     with open(ttoi_file, 'r', encoding="utf-8") as f:
@@ -91,7 +93,8 @@ if __name__ == '__main__':
         itot = json.load(f)
 
     # Load model
-    model = torch.load(model_dir / '{}.pt'.format(models_set[model_choice]), map_location=device)
+    model = torch.load(
+        model_dir / '{}.pt'.format(models_set[model_choice]), map_location=device)
     model.to(device)
 
     posgendata = POSGenDataset(data_dir, wtoi, ttoi)
@@ -102,7 +105,8 @@ if __name__ == '__main__':
     with open('dev.p5.out', 'w', encoding="utf-8") as f:
         for sentence in gen_tag:
             for i in range(len(sentence[0])):
-                f.write('{} {}\n'.format(posgendata.true_word[ctr], itot[str(sentence[0][i].item())]))
+                f.write('{} {}\n'.format(
+                    posgendata.true_word[ctr], itot[str(sentence[0][i].item())]))
                 ctr += 1
             f.write('\n')
     print('Completed')

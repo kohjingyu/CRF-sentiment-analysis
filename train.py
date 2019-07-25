@@ -9,6 +9,7 @@ import random
 import matplotlib.pyplot as plt
 from models import *
 import json
+import copy
 
 data_dir = Path("data/")
 output_model_dir = Path("checkpoint/")
@@ -27,9 +28,10 @@ class POSTrainDataset(Dataset):
         path (Path object or str): path on the local directory to the dataset to load from.
         dataset_choice (str): 'EN' or 'ES', defaults to 'EN'
         split (float): Between 0 - 1, indicates size of train set where 1-split is the size of validation set
+        unk_chance (float): Between 0 - 1, probability of changing a word to 'UNK' at train time (To try to account for UNK in validation), default as 0.01
     '''
 
-    def __init__(self, path, dataset_choice='EN', split=0.8):
+    def __init__(self, path, dataset_choice='EN', split=0.8, unk_chance=0.01):
         self.path = path
         self.dataset_choice = dataset_choice
         self.itow = {0: 'UNK'}  # Dict to map index to word
@@ -38,6 +40,7 @@ class POSTrainDataset(Dataset):
         self.ttoi = {}  # Dict to map tag to index
         self.dataset = []
         self.train = True
+        self.unk_chance = unk_chance
 
         # Counters to keep track of last used index for mapping
         word_ctr = 1
@@ -96,7 +99,10 @@ class POSTrainDataset(Dataset):
 
     def __getitem__(self, idx):
         if self.train:
-            data, target = self.train_data[idx]
+            data, target = copy.deepcopy(self.train_data[idx])
+            for i in range(len(data)):
+                if random.random() < self.unk_chance:
+                    data[i] = self.wtoi['UNK']
         else:
             data, target = self.val_data[idx]
         return torch.Tensor(data).long(), torch.Tensor(target).long()
@@ -188,7 +194,9 @@ def main():
 
     # Criterion to for loss
     weighted_loss = torch.ones(len(posdataset.ttoi))
-    weighted_loss[posdataset.ttoi['O']] = 0.1
+    for i in range(len(weighted_loss)):
+        if i != posdataset.ttoi['O']:
+            weighted_loss[i] = 10
     weighted_loss = weighted_loss.to(device)
     criterion = nn.CrossEntropyLoss(weight=weighted_loss)
 
@@ -210,8 +218,8 @@ def main():
 
     elif model_choice == 1:
         # Hyper Parameters
-        EMBEDDING_SIZE = 256
-        HIDDEN_DIM = 256
+        EMBEDDING_SIZE = 512
+        HIDDEN_DIM = 512
         N_LAYERS = 2
         LEARNING_RATE = 1e-3
         MOMENTUM = 0.9
