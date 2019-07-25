@@ -26,7 +26,7 @@ class BaseLineBLSTM(nn.Module):
         embeds = self.word_embed(x)
         lstm_out, _ = self.lstm(embeds)
         tag_space = self.hiddentotag(lstm_out)
-        tag_scores = F.log_softmax(tag_space, dim=1)
+        tag_scores = F.softmax(tag_space, dim=2)
         return tag_scores
 
 
@@ -62,5 +62,5 @@ class Seq2Seq(nn.Module):
         lstm_out, _ = self.decoder(decode_embed, (hn, cn))
 
         tag_space = self.hiddentotag(lstm_out)
-        tag_scores = F.log_softmax(tag_space, dim=1)
+        tag_scores = F.softmax(tag_space, dim=2)
         return tag_scores

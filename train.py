@@ -8,6 +8,7 @@ import os
 import random
 import matplotlib.pyplot as plt
 from models import *
+import json
 
 data_dir = Path("data/")
 output_model_dir = Path("checkpoint/")
@@ -80,6 +81,12 @@ class POSTrainDataset(Dataset):
         random.shuffle(self.dataset)
         self.train_data = self.dataset[:int(len(self.dataset)*split)]
         self.val_data = self.dataset[int(len(self.dataset)*split):]
+        with open('wtoi.txt', 'w', encoding="utf-8") as f:
+            json.dump(self.wtoi, f)
+        with open('ttoi.txt', 'w', encoding="utf-8") as f:
+            json.dump(self.ttoi, f)
+        with open('itot.txt', 'w', encoding="utf-8") as f:
+            json.dump(self.itot, f)
 
     def __len__(self):
         if self.train:
@@ -125,6 +132,7 @@ def eval(eval_loader, model, criterion, device):
     total_loss = 0
     total_correct = 0
     total_constituents = 0
+    stats = {}
 
     # Iterate evaluluation data
     # Set no grad
@@ -142,19 +150,44 @@ def eval(eval_loader, model, criterion, device):
             pred = output.argmax(dim=1)
             for i in range(len(pred)):
                 total_constituents += 1
+                if target[0][i].item() not in stats:
+                    stats[target[0][i].item()] = {'TP': 0, 'FP': 0, 'FN': 0}
                 if pred[0][i].item() == target[0][i].item():
                     total_correct += 1
+                    if pred[0][i].item() not in stats:
+                        stats[pred[0][i].item()] = {'TP': 0, 'FP': 0, 'FN': 0}
+                    stats[pred[0][i].item()]['TP'] += 1
+                if pred[0][i].item() != target[0][i].item():
+                    if pred[0][i].item() not in stats:
+                        stats[pred[0][i].item()] = {'TP': 0, 'FP': 0, 'FN': 0}
+                    if target[0][i].item() not in stats:
+                        stats[target[0][i].item()] = {
+                            'TP': 0, 'FP': 0, 'FN': 0}
+                    stats[pred[0][i].item()]['FP'] += 1
+                    stats[target[0][i].item()]['FN'] += 1
 
-    return total_loss/len(eval_loader), total_correct/total_constituents
+    avg_precision = []
+    avg_recall = []
+    for key in stats:
+        if (stats[key]['TP']+stats[key]['FP']) != 0:
+            avg_precision.append(
+                stats[key]['TP']/(stats[key]['TP']+stats[key]['FP']))
+        if (stats[key]['TP']+stats[key]['FN']) != 0:
+            avg_recall.append(stats[key]['TP'] /
+                              (stats[key]['TP']+stats[key]['FN']))
+
+    return total_loss/len(eval_loader), total_correct/total_constituents, sum(avg_precision)/len(avg_precision), sum(avg_recall)/len(avg_recall)
 
 
 def main():
-    # Criterion to for loss
-    criterion = nn.NLLLoss()
-
     # Init Train Dataset
     posdataset = POSTrainDataset(data_dir)
     loader = DataLoader(posdataset)
+
+    # Criterion to for loss
+    weighted_loss = torch.ones(len(posdataset.ttoi))
+    weighted_loss[posdataset.ttoi['O']] = 0.1
+    criterion = nn.CrossEntropyLoss(weight=weighted_loss)
 
     if model_choice == 0:
         # Hyper Parameters
@@ -206,11 +239,12 @@ def main():
         train_losses.append(trainloss)
         # Toggle Validation Set
         posdataset.train = False
-        loss, accuracy = eval(loader, model, criterion, device)
+        loss, accuracy, precision, recall = eval(
+            loader, model, criterion, device)
         eval_losses.append(loss)
         eval_accuracies.append(accuracy)
-        print('Epoch {}, Training Loss: {}, Evaluation Loss: {}, Evaluation Accuracy: {}'.format(
-            epoch, trainloss, loss, accuracy))
+        print('Epoch {}, Training Loss: {}, Evaluation Loss: {}, Evaluation Accuracy: {}, Evaluation Precision: {}, Evaluation Recall: {}'.format(
+            epoch, trainloss, loss, accuracy, precision, recall))
 
         # Check if current loss is better than previous
         if loss < best_loss:
