@@ -8,6 +8,8 @@ import os
 import random
 import matplotlib.pyplot as plt
 from models import *
+import json
+import copy
 
 data_dir = Path("data/")
 output_model_dir = Path("checkpoint/")
@@ -15,8 +17,8 @@ if not os.path.exists(output_model_dir):
     os.mkdir(output_model_dir)
 use_cuda = torch.cuda.is_available()
 device = torch.device('cuda' if use_cuda else 'cpu')
-models_set = ['baseline']  # What models are available
-model_choice = 0  # Choice of model, tallies with models_set
+models_set = ['baseline', 'seq2seq']  # What models are available
+model_choice = 1  # Choice of model, tallies with models_set
 
 
 class POSTrainDataset(Dataset):
@@ -26,9 +28,10 @@ class POSTrainDataset(Dataset):
         path (Path object or str): path on the local directory to the dataset to load from.
         dataset_choice (str): 'EN' or 'ES', defaults to 'EN'
         split (float): Between 0 - 1, indicates size of train set where 1-split is the size of validation set
+        unk_chance (float): Between 0 - 1, probability of changing a word to 'UNK' at train time (To try to account for UNK in validation), default as 0.01
     '''
 
-    def __init__(self, path, dataset_choice='EN', split=0.8):
+    def __init__(self, path, dataset_choice='EN', split=0.8, unk_chance=0.01):
         self.path = path
         self.dataset_choice = dataset_choice
         self.itow = {0: 'UNK'}  # Dict to map index to word
@@ -37,6 +40,7 @@ class POSTrainDataset(Dataset):
         self.ttoi = {}  # Dict to map tag to index
         self.dataset = []
         self.train = True
+        self.unk_chance = unk_chance
 
         # Counters to keep track of last used index for mapping
         word_ctr = 1
@@ -80,6 +84,12 @@ class POSTrainDataset(Dataset):
         random.shuffle(self.dataset)
         self.train_data = self.dataset[:int(len(self.dataset)*split)]
         self.val_data = self.dataset[int(len(self.dataset)*split):]
+        with open('wtoi.txt', 'w', encoding="utf-8") as f:
+            json.dump(self.wtoi, f)
+        with open('ttoi.txt', 'w', encoding="utf-8") as f:
+            json.dump(self.ttoi, f)
+        with open('itot.txt', 'w', encoding="utf-8") as f:
+            json.dump(self.itot, f)
 
     def __len__(self):
         if self.train:
@@ -89,7 +99,10 @@ class POSTrainDataset(Dataset):
 
     def __getitem__(self, idx):
         if self.train:
-            data, target = self.train_data[idx]
+            data, target = copy.deepcopy(self.train_data[idx])
+            for i in range(len(data)):
+                if random.random() < self.unk_chance:
+                    data[i] = self.wtoi['UNK']
         else:
             data, target = self.val_data[idx]
         return torch.Tensor(data).long(), torch.Tensor(target).long()
@@ -125,6 +138,7 @@ def eval(eval_loader, model, criterion, device):
     total_loss = 0
     total_correct = 0
     total_constituents = 0
+    stats = {}
 
     # Iterate evaluluation data
     # Set no grad
@@ -142,19 +156,49 @@ def eval(eval_loader, model, criterion, device):
             pred = output.argmax(dim=1)
             for i in range(len(pred)):
                 total_constituents += 1
+                if target[0][i].item() not in stats:
+                    stats[target[0][i].item()] = {'TP': 0, 'FP': 0, 'FN': 0}
                 if pred[0][i].item() == target[0][i].item():
                     total_correct += 1
+                    if pred[0][i].item() not in stats:
+                        stats[pred[0][i].item()] = {'TP': 0, 'FP': 0, 'FN': 0}
+                    stats[pred[0][i].item()]['TP'] += 1
+                if pred[0][i].item() != target[0][i].item():
+                    if pred[0][i].item() not in stats:
+                        stats[pred[0][i].item()] = {'TP': 0, 'FP': 0, 'FN': 0}
+                    if target[0][i].item() not in stats:
+                        stats[target[0][i].item()] = {
+                            'TP': 0, 'FP': 0, 'FN': 0}
+                    stats[pred[0][i].item()]['FP'] += 1
+                    stats[target[0][i].item()]['FN'] += 1
 
-    return total_loss/len(eval_loader), total_correct/total_constituents
+    avg_precision = []
+    avg_recall = []
+    for key in stats:
+        if (stats[key]['TP']+stats[key]['FP']) != 0:
+            avg_precision.append(
+                stats[key]['TP']/(stats[key]['TP']+stats[key]['FP']))
+        if (stats[key]['TP']+stats[key]['FN']) != 0:
+            avg_recall.append(stats[key]['TP'] /
+                              (stats[key]['TP']+stats[key]['FN']))
+
+    return total_loss/len(eval_loader), total_correct/total_constituents, sum(avg_precision)/len(avg_precision), sum(avg_recall)/len(avg_recall)
 
 
 def main():
-    # Criterion to for loss
-    criterion = nn.NLLLoss()
+    EPOCHS = 500
 
     # Init Train Dataset
     posdataset = POSTrainDataset(data_dir)
     loader = DataLoader(posdataset)
+
+    # Criterion to for loss
+    weighted_loss = torch.ones(len(posdataset.ttoi))
+    for i in range(len(weighted_loss)):
+        if i != posdataset.ttoi['O']:
+            weighted_loss[i] = 10
+    weighted_loss = weighted_loss.to(device)
+    criterion = nn.CrossEntropyLoss(weight=weighted_loss)
 
     if model_choice == 0:
         # Hyper Parameters
@@ -164,19 +208,34 @@ def main():
         LEARNING_RATE = 1e-3
         MOMENTUM = 0.9
         WEIGHT_DECAY = 1e-5
-        EPOCHS = 200
         # Define Baseline Model
-        baselinemodel = BaseLineBLSTM(
+        model = BaseLineBLSTM(
             len(posdataset.wtoi), EMBEDDING_SIZE, HIDDEN_DIM, N_LAYERS, len(posdataset.ttoi))
-        baselinemodel.to(device)
+        model.to(device)
         # Set up optimizer for Baseline Model
-        optimizer = optim.SGD(baselinemodel.parameters(
+        optimizer = optim.SGD(model.parameters(
+        ), lr=LEARNING_RATE, momentum=MOMENTUM, weight_decay=WEIGHT_DECAY)
+
+    elif model_choice == 1:
+        # Hyper Parameters
+        EMBEDDING_SIZE = 512
+        HIDDEN_DIM = 512
+        N_LAYERS = 2
+        LEARNING_RATE = 1e-3
+        MOMENTUM = 0.9
+        WEIGHT_DECAY = 1e-5
+        # Define Seq2Seq Model
+        model = Seq2Seq(
+            len(posdataset.wtoi), EMBEDDING_SIZE, HIDDEN_DIM, N_LAYERS, len(posdataset.ttoi))
+        model.to(device)
+        # Set up optimizer for Seq2Seq Model
+        optimizer = optim.SGD(model.parameters(
         ), lr=LEARNING_RATE, momentum=MOMENTUM, weight_decay=WEIGHT_DECAY)
 
     # Implement Early stop
     early_stop = 0
 
-    # Baseline model training and eval
+    # Model training and eval
     best_loss = sys.maxsize
     train_losses = []
     eval_losses = []
@@ -184,21 +243,22 @@ def main():
     for epoch in range(1, EPOCHS+1):
         # Toggle Train set
         posdataset.train = True
-        trainloss = train(loader, baselinemodel,
+        trainloss = train(loader, model,
                           optimizer, criterion, device)
         train_losses.append(trainloss)
         # Toggle Validation Set
         posdataset.train = False
-        loss, accuracy = eval(loader, baselinemodel, criterion, device)
+        loss, accuracy, precision, recall = eval(
+            loader, model, criterion, device)
         eval_losses.append(loss)
         eval_accuracies.append(accuracy)
-        print('Epoch {}, Training Loss: {}, Evaluation Loss: {}, Evaluation Accuracy: {}'.format(
-            epoch, trainloss, loss, accuracy))
+        print('Epoch {}, Training Loss: {}, Evaluation Loss: {}, Evaluation Accuracy: {}, Evaluation Precision: {}, Evaluation Recall: {}'.format(
+            epoch, trainloss, loss, accuracy, precision, recall))
 
         # Check if current loss is better than previous
         if loss < best_loss:
             best_loss = loss
-            torch.save(baselinemodel, output_model_dir /
+            torch.save(model, output_model_dir /
                        '{}.pt'.format(models_set[model_choice]))
             early_stop = 0
 
