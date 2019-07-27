@@ -17,8 +17,8 @@ if not os.path.exists(output_model_dir):
     os.mkdir(output_model_dir)
 use_cuda = torch.cuda.is_available()
 device = torch.device('cuda' if use_cuda else 'cpu')
-models_set = ['baseline', 'seq2seq']  # What models are available
-model_choice = 1  # Choice of model, tallies with models_set
+models_set = ['baseline', 'seq2seq', 'attnseq2seq']  # What models are available
+model_choice = 2  # Choice of model, tallies with models_set
 
 
 class POSTrainDataset(Dataset):
@@ -31,7 +31,7 @@ class POSTrainDataset(Dataset):
         unk_chance (float): Between 0 - 1, probability of changing a word to 'UNK' at train time (To try to account for UNK in validation), default as 0.01
     '''
 
-    def __init__(self, path, dataset_choice='EN', split=0.8, unk_chance=0.01):
+    def __init__(self, path, dataset_choice='EN', split=0.8, unk_chance=0.05):
         self.path = path
         self.dataset_choice = dataset_choice
         self.itow = {0: 'UNK'}  # Dict to map index to word
@@ -175,14 +175,24 @@ def eval(eval_loader, model, criterion, device):
     avg_precision = []
     avg_recall = []
     for key in stats:
-        if (stats[key]['TP']+stats[key]['FP']) != 0:
+        if (stats[key]['TP']+stats[key]['FP']) != 0 and key != eval_loader.dataset.ttoi['O']:
             avg_precision.append(
                 stats[key]['TP']/(stats[key]['TP']+stats[key]['FP']))
-        if (stats[key]['TP']+stats[key]['FN']) != 0:
+        if (stats[key]['TP']+stats[key]['FN']) != 0 and key != eval_loader.dataset.ttoi['O']:
             avg_recall.append(stats[key]['TP'] /
                               (stats[key]['TP']+stats[key]['FN']))
 
-    return total_loss/len(eval_loader), total_correct/total_constituents, sum(avg_precision)/len(avg_precision), sum(avg_recall)/len(avg_recall)
+    if sum(avg_precision) == 0:
+        avg_precision = 0
+    else:
+        avg_precision = sum(avg_precision)/len(avg_precision)
+
+    if sum(avg_recall) == 0:
+        avg_recall = 0
+    else:
+        avg_recall = sum(avg_recall)/len(avg_recall)
+
+    return total_loss/len(eval_loader), total_correct/total_constituents, avg_precision, avg_recall
 
 
 def main():
@@ -196,7 +206,7 @@ def main():
     weighted_loss = torch.ones(len(posdataset.ttoi))
     for i in range(len(weighted_loss)):
         if i != posdataset.ttoi['O']:
-            weighted_loss[i] = 10
+            weighted_loss[i] = 13
     weighted_loss = weighted_loss.to(device)
     criterion = nn.CrossEntropyLoss(weight=weighted_loss)
 
@@ -232,6 +242,22 @@ def main():
         optimizer = optim.SGD(model.parameters(
         ), lr=LEARNING_RATE, momentum=MOMENTUM, weight_decay=WEIGHT_DECAY)
 
+    elif model_choice == 2:
+        # Hyper Parameters
+        EMBEDDING_SIZE = 256
+        HIDDEN_DIM = 256
+        N_LAYERS = 2
+        LEARNING_RATE = 1e-3
+        MOMENTUM = 0.9
+        WEIGHT_DECAY = 1e-5
+
+        model = AttentionSeq2Seq(
+            len(posdataset.wtoi), EMBEDDING_SIZE, HIDDEN_DIM, N_LAYERS, len(posdataset.ttoi))
+        model.to(device)
+        # Set up optimizer for Seq2Seq Model
+        optimizer = optim.SGD(model.parameters(
+        ), lr=LEARNING_RATE, momentum=MOMENTUM, weight_decay=WEIGHT_DECAY)
+
     # Implement Early stop
     early_stop = 0
 
@@ -239,7 +265,8 @@ def main():
     best_loss = sys.maxsize
     train_losses = []
     eval_losses = []
-    eval_accuracies = []
+    eval_recall = []
+    eval_precision = []
     for epoch in range(1, EPOCHS+1):
         # Toggle Train set
         posdataset.train = True
@@ -251,7 +278,8 @@ def main():
         loss, accuracy, precision, recall = eval(
             loader, model, criterion, device)
         eval_losses.append(loss)
-        eval_accuracies.append(accuracy)
+        eval_recall.append(recall)
+        eval_precision.append(precision)
         print('Epoch {}, Training Loss: {}, Evaluation Loss: {}, Evaluation Accuracy: {}, Evaluation Precision: {}, Evaluation Recall: {}'.format(
             epoch, trainloss, loss, accuracy, precision, recall))
 
@@ -287,9 +315,16 @@ def main():
     plt.figure()
     plt.title('{} Model Evaluation'.format(models_set[model_choice]))
     plt.xlabel('Epoch')
-    plt.ylabel('Accuracy')
-    plt.plot(eval_accuracies)
-    plt.savefig('{}EvalAcc.png'.format(models_set[model_choice]))
+    plt.ylabel('Precision')
+    plt.plot(eval_precision)
+    plt.savefig('{}EvalPrec.png'.format(models_set[model_choice]))
+
+    plt.figure()
+    plt.title('{} Model Evaluation'.format(models_set[model_choice]))
+    plt.xlabel('Epoch')
+    plt.ylabel('Recall')
+    plt.plot(eval_recall)
+    plt.savefig('{}EvalRecall.png'.format(models_set[model_choice]))
 
 
 if __name__ == '__main__':
