@@ -57,6 +57,7 @@ class POSTrainDataset(Dataset):
         with open(self.path / self.dataset_choice / 'train', encoding="utf-8") as f:
             data = []
             target = []
+            self.entities = {}
             for line in f:
                 # Strip newline
                 formatted_line = line.strip()
@@ -87,6 +88,16 @@ class POSTrainDataset(Dataset):
                     self.dataset.append((data, target))
                     data = []
                     target = []
+
+                # For weighted loss
+                if y not in self.entities:
+                    self.entities[y] = 1
+                else:
+                    self.entities[y] += 1
+
+        highest = self.entities[max(self.entities, key=self.entities.get)]
+        for key in self.entities:
+            self.entities[key] = 1/(self.entities[key]/highest)
 
         # Shuffle data and split into train and val
         random.shuffle(self.dataset)
@@ -123,7 +134,8 @@ class POSTrainDataset(Dataset):
             inp = []
             for word in sentdata:
                 if self.tokenizer._convert_token_to_id('▁'+word[0]) != 0:
-                    inp.append(self.tokenizer._convert_token_to_id('▁'+word[0]))
+                    inp.append(
+                        self.tokenizer._convert_token_to_id('▁'+word[0]))
                 else:
                     inp.append(self.tokenizer._convert_token_to_id(word[0]))
             input_ids = torch.tensor(inp)
@@ -226,12 +238,14 @@ def main():
     posdataset = POSTrainDataset(data_dir, unk_chance=0)
     loader = DataLoader(posdataset, num_workers=1)
 
-    # Criterion to for loss
+    # Criterion to for loss (weighted)
     weighted_loss = torch.ones(len(posdataset.ttoi))
-    for i in range(len(weighted_loss)):
-        if i != posdataset.ttoi['O']:
-            weighted_loss[i] = 13
+
+    for key in posdataset.entities:
+        weighted_loss[posdataset.ttoi[key]] = posdataset.entities[key]
     weighted_loss = weighted_loss.to(device)
+    print(posdataset.entities)
+    print(weighted_loss)
     criterion = nn.CrossEntropyLoss(weight=weighted_loss)
 
     if model_choice == 0:
