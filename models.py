@@ -113,6 +113,29 @@ class XLNetTest(nn.Module):
         config = XLNetConfig.from_pretrained('xlnet-large-cased')
         self.model = XLNetModel(config) 
 
+        # self.decoder = nn.LSTM(1024, hidden_dim,
+        #                        n_layers)
+
+        self.hiddentotag = nn.Linear(1024, tagset_size)
+
+    def forward(self, x):
+        # No grad the XLNet
+        with torch.no_grad():
+            outputs = self.model(x)[0]
+
+        # lstm_out, _ = self.decoder(outputs)
+
+        tag_space = self.hiddentotag(outputs)
+        tag_scores = F.softmax(tag_space, dim=2)
+
+        return tag_scores
+
+class XLNetLSTM(nn.Module):
+    def __init__(self, vocab_size, hidden_dim, n_layers, tagset_size):
+        super(XLNetLSTM, self).__init__()
+        config = XLNetConfig.from_pretrained('xlnet-large-cased')
+        self.model = XLNetModel(config) 
+
         self.decoder = nn.LSTM(1024, hidden_dim,
                                n_layers)
 
