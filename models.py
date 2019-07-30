@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+from pytorch_transformers import XLNetModel, XLNetConfig
 
 class BaseLineBLSTM(nn.Module):
     '''
@@ -90,7 +90,6 @@ class AttentionSeq2Seq(nn.Module):
         self.decoder = nn.LSTM(embedding_dim,
                                hidden_dim, n_layers, bidirectional=True)
 
-
         self.hiddentotag = nn.Linear(hidden_dim*2, tagset_size)
 
     def forward(self, x):
@@ -104,6 +103,29 @@ class AttentionSeq2Seq(nn.Module):
         decoder_out, _ = self.decoder(decode_emb, (hn, cn))
 
         tag_space = self.hiddentotag(decoder_out)
+        tag_scores = F.softmax(tag_space, dim=2)
+
+        return tag_scores
+
+class XLNetTest(nn.Module):
+    def __init__(self, vocab_size, hidden_dim, n_layers, tagset_size):
+        super(XLNetTest, self).__init__()
+        config = XLNetConfig.from_pretrained('xlnet-large-cased')
+        self.model = XLNetModel(config) 
+
+        self.decoder = nn.LSTM(1024, hidden_dim,
+                               n_layers)
+
+        self.hiddentotag = nn.Linear(hidden_dim, tagset_size)
+
+    def forward(self, x):
+        # No grad the XLNet
+        with torch.no_grad():
+            outputs = self.model(x)[0]
+
+        lstm_out, _ = self.decoder(outputs)
+
+        tag_space = self.hiddentotag(lstm_out)
         tag_scores = F.softmax(tag_space, dim=2)
 
         return tag_scores

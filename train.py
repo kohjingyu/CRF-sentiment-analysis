@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 from models import *
 import json
 import copy
+from pytorch_transformers import XLNetTokenizer
 
 data_dir = Path("data/")
 output_model_dir = Path("checkpoint/")
@@ -17,8 +18,9 @@ if not os.path.exists(output_model_dir):
     os.mkdir(output_model_dir)
 use_cuda = torch.cuda.is_available()
 device = torch.device('cuda' if use_cuda else 'cpu')
-models_set = ['baseline', 'seq2seq', 'attnseq2seq']  # What models are available
-model_choice = 2  # Choice of model, tallies with models_set
+models_set = ['baseline', 'seq2seq', 'attnseq2seq',
+              'xlnettest']  # What models are available
+model_choice = 3  # Choice of model, tallies with models_set
 
 
 class POSTrainDataset(Dataset):
@@ -41,6 +43,12 @@ class POSTrainDataset(Dataset):
         self.dataset = []
         self.train = True
         self.unk_chance = unk_chance
+
+        # TODO: Might wanna shift it away
+        self.tokenizer = XLNetTokenizer.from_pretrained('xlnet-large-cased')
+        self.tokenizer.keep_accents = True
+        self.tokenizer.remove_space = True
+        self.xlnet = False
 
         # Counters to keep track of last used index for mapping
         word_ctr = 1
@@ -90,6 +98,8 @@ class POSTrainDataset(Dataset):
             json.dump(self.ttoi, f)
         with open('itot.txt', 'w', encoding="utf-8") as f:
             json.dump(self.itot, f)
+        with open('itow.txt', 'w', encoding="utf-8") as f:
+            json.dump(self.itow, f)
 
     def __len__(self):
         if self.train:
@@ -105,7 +115,21 @@ class POSTrainDataset(Dataset):
                     data[i] = self.wtoi['UNK']
         else:
             data, target = self.val_data[idx]
-        return torch.Tensor(data).long(), torch.Tensor(target).long()
+
+        # TODO: might wanna change how this work
+        if self.xlnet:
+            sentdata = [self.itow[x] for x in data]
+            # Manual token to id to fit the way our dataset works
+            inp = []
+            for word in sentdata:
+                if self.tokenizer._convert_token_to_id('▁'+word[0]) != 0:
+                    inp.append(self.tokenizer._convert_token_to_id('▁'+word[0]))
+                else:
+                    inp.append(self.tokenizer._convert_token_to_id(word[0]))
+            input_ids = torch.tensor(inp)
+            return input_ids, torch.Tensor(target).long()
+        else:
+            return torch.Tensor(data).long(), torch.Tensor(target).long()
 
 
 def train(train_loader, model, optimizer, criterion, device):
@@ -199,8 +223,8 @@ def main():
     EPOCHS = 500
 
     # Init Train Dataset
-    posdataset = POSTrainDataset(data_dir)
-    loader = DataLoader(posdataset)
+    posdataset = POSTrainDataset(data_dir, unk_chance=0)
+    loader = DataLoader(posdataset, num_workers=1)
 
     # Criterion to for loss
     weighted_loss = torch.ones(len(posdataset.ttoi))
@@ -255,6 +279,28 @@ def main():
             len(posdataset.wtoi), EMBEDDING_SIZE, HIDDEN_DIM, N_LAYERS, len(posdataset.ttoi))
         model.to(device)
         # Set up optimizer for Seq2Seq Model
+        optimizer = optim.SGD(model.parameters(
+        ), lr=LEARNING_RATE, momentum=MOMENTUM, weight_decay=WEIGHT_DECAY)
+
+    elif model_choice == 3:
+        # Hyper Parameters
+        EMBEDDING_SIZE = 256
+        HIDDEN_DIM = 128
+        N_LAYERS = 1
+        LEARNING_RATE = 1e-3
+        MOMENTUM = 0.9
+        WEIGHT_DECAY = 1e-5
+
+        model = XLNetTest(
+            len(posdataset.wtoi), HIDDEN_DIM, N_LAYERS, len(posdataset.ttoi))
+        # No grad XLNet
+        for p in model.model.parameters():
+            p.requires_grad = False
+
+        model.to(device)
+
+        # Hackish way
+        posdataset.xlnet = True
         optimizer = optim.SGD(model.parameters(
         ), lr=LEARNING_RATE, momentum=MOMENTUM, weight_decay=WEIGHT_DECAY)
 
