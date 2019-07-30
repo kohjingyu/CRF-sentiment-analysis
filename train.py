@@ -121,6 +121,7 @@ def train(train_loader, model, optimizer, criterion, device):
         # Get predictions from output
         output = model(data)
         output = output.transpose(1, 2)
+        print(output.size())
         # Calculate loss
         loss = criterion(output, target)
         total_loss += loss.item()
