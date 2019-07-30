@@ -7,16 +7,18 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from models import *
 import json
+from pytorch_transformers import XLNetTokenizer
 
 data_dir = Path("data/")
 model_dir = Path("checkpoint/")
 use_cuda = torch.cuda.is_available()
 device = torch.device('cuda' if use_cuda else 'cpu')
-models_set = ['baseline', 'seq2seq', 'attnseq2seq']  # What models are available
-model_choice = 2  # Choice of model, tallies with models_set
+models_set = ['baseline', 'seq2seq', 'attnseq2seq', 'xlnettest']  # What models are available
+model_choice = 3  # Choice of model, tallies with models_set
 ttoi_file = 'ttoi.txt'
 itot_file = 'itot.txt'
 wtoi_file = 'wtoi.txt'
+itow_file = 'itow.txt'
 
 
 class POSGenDataset(Dataset):
@@ -29,13 +31,20 @@ class POSGenDataset(Dataset):
         dataset_choice (str): 'EN' or 'ES', defaults to 'EN'
     '''
 
-    def __init__(self, path, train_wtoi, train_ttoi, dataset_choice='EN'):
+    def __init__(self, path, train_wtoi, train_ttoi, train_itow, dataset_choice='EN'):
         self.path = path
         self.dataset_choice = dataset_choice
         self.wtoi = train_wtoi
         self.ttoi = train_ttoi
+        self.itow = train_itow
         self.dataset = []
         self.true_word = []
+
+        # TODO: Might wanna shift it away
+        self.tokenizer = XLNetTokenizer.from_pretrained('xlnet-large-cased')
+        self.tokenizer.keep_accents = True
+        self.tokenizer.remove_space = True
+        self.xlnet = False
 
         with open(self.path / self.dataset_choice / 'dev.in', encoding="utf-8") as f:
             data = []
@@ -53,10 +62,13 @@ class POSGenDataset(Dataset):
                     # Check if word in vocab
                     if x in self.wtoi:
                         # Add index of word if it exist in vocab
-                        data.append(self.wtoi[x])
+                        # data.append(self.wtoi[x])
+                        data.append(x)
                     else:
                         # Add index of UNK if it does not
-                        data.append(self.wtoi['UNK'])
+                        # data.append(self.wtoi['UNK'])
+                        data.append('<unk>')
+
 
                 else:
                     # End of sentence
@@ -68,7 +80,21 @@ class POSGenDataset(Dataset):
 
     def __getitem__(self, idx):
         data = self.dataset[idx]
-        return torch.Tensor(data).long()
+
+        # TODO: might wanna change how this work
+        if self.xlnet:
+            sentdata = [self.itow[x] for x in data]
+            # Manual token to id to fit the way our dataset works
+            inp = []
+            for word in sentdata:
+                if self.tokenizer._convert_token_to_id('▁'+word[0]) != 0:
+                    inp.append(self.tokenizer._convert_token_to_id('▁'+word[0]))
+                else:
+                    inp.append(self.tokenizer._convert_token_to_id(word[0]))
+            input_ids = torch.tensor(inp)
+            return input_ids
+        else:
+            return torch.Tensor(data).long()
 
 
 def generate(gen_loader, model, device):
@@ -76,7 +102,7 @@ def generate(gen_loader, model, device):
     gen_tag = []
     with torch.no_grad():
         for data in gen_loader:
-            data = data.to(device)
+            data = data
             output = model(data)
             pred = output.argmax(dim=2)
             gen_tag.append(pred)
@@ -91,13 +117,16 @@ if __name__ == '__main__':
         wtoi = json.load(f)
     with open(itot_file, 'r', encoding="utf-8") as f:
         itot = json.load(f)
+    with open(itow_file, 'r', encoding="utf-8") as f:
+        itow = json.load(f)    
 
     # Load model
     model = torch.load(
         model_dir / '{}.pt'.format(models_set[model_choice]), map_location=device)
     model.to(device)
 
-    posgendata = POSGenDataset(data_dir, wtoi, ttoi)
+    posgendata = POSGenDataset(data_dir, wtoi, ttoi, itow)
+    posgendata.xlnet=True
     gen_loader = DataLoader(posgendata)
 
     gen_tag = generate(gen_loader, model, device)
