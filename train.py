@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 from models import *
 import json
 import copy
-from pytorch_transformers import XLNetTokenizer, AdamW
+from pytorch_transformers import BertTokenizer, AdamW
 
 data_dir = Path("data/")
 output_model_dir = Path("checkpoint/")
@@ -48,7 +48,7 @@ class POSTrainDataset(Dataset):
 
         if self.xlnet:
             # TODO: Might wanna shift it away
-            self.tokenizer = XLNetTokenizer.from_pretrained('xlnet-large-cased')
+            self.tokenizer = BertTokenizer.from_pretrained('bert-base-multilingual-cased', do_lower_case = False)
 
         # Counters to keep track of last used index for mapping
         word_ctr = 1
@@ -135,33 +135,57 @@ class POSTrainDataset(Dataset):
             # Manual token to id to fit the way our dataset works
             input_ids = self.tokenizer.encode(' '.join(data))
 
-            input_ids = [x for x in input_ids if x != 17]
+            # input_ids = [x for x in input_ids if x != 17]
             reverse_token = [self.tokenizer._convert_id_to_token(x) for x in input_ids]
 
             idx_track = []
-            data_pointer = 0
-            token_pointer = 0
+            ctr = 0
             construct = ''
-            while data_pointer < len(data) and token_pointer < len(reverse_token):
-                if data[data_pointer] in reverse_token[token_pointer]:
-                    idx_track.append(token_pointer)
-                    data_pointer += 1
-                    token_pointer += 1
+            first = True
+            for i in range(len(reverse_token)):
+                if reverse_token[i] == data[ctr] or reverse_token[i] == '[UNK]':
+                    idx_track.append(i)
+                    ctr += 1
                 else:
-                    idx_track.append(token_pointer)
-                    construct = reverse_token[token_pointer]
-                    while True:
-                        token_pointer += 1
-                        construct += reverse_token[token_pointer]
-                        if data_pointer < len(data)-1:
-                            if data[data_pointer+1] in reverse_token[token_pointer]:
-                                construct = ''
-                                data_pointer += 1
-                                break
-                        if data[data_pointer] in construct:
-                            construct = ''
-                            data_pointer += 1
-                            break
+                    if first:
+                        idx_track.append(i)
+                        first = False
+                    if reverse_token[i].startswith('#'):
+                        construct += reverse_token[i][2:]
+                    else:
+                        construct += reverse_token[i]
+                    
+                    if construct == data[ctr]:
+                        ctr += 1
+                        construct = ''
+                        first = True
+            # print(data)
+            # print(reverse_token)
+            # print(idx_track)
+            # idx_track = []
+            # data_pointer = 0
+            # token_pointer = 0
+            # construct = ''
+            # while data_pointer < len(data) and token_pointer < len(reverse_token):
+            #     if data[data_pointer] in reverse_token[token_pointer]:
+            #         idx_track.append(token_pointer)
+            #         data_pointer += 1
+            #         token_pointer += 1
+            #     else:
+            #         idx_track.append(token_pointer)
+            #         construct = reverse_token[token_pointer]
+            #         while True:
+            #             token_pointer += 1
+            #             construct += reverse_token[token_pointer]
+            #             if data_pointer < len(data)-1:
+            #                 if data[data_pointer+1] in reverse_token[token_pointer]:
+            #                     construct = ''
+            #                     data_pointer += 1
+            #                     break
+            #             if data[data_pointer] in construct:
+            #                 construct = ''
+            #                 data_pointer += 1
+            #                 break
             return torch.tensor(input_ids), torch.tensor(idx_track), torch.Tensor(target).long()
         else:
             return torch.Tensor(data).long(), torch.Tensor(target).long()
@@ -260,7 +284,7 @@ def main():
 
     # Init Train Dataset
     posdataset = POSTrainDataset(data_dir, unk_chance=0, xlnet=True)
-    loader = DataLoader(posdataset, num_workers=8)
+    loader = DataLoader(posdataset)
 
     # Criterion to for loss (weighted)
     weighted_loss = torch.ones(len(posdataset.ttoi))

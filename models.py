@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from pytorch_transformers import XLNetModel, XLNetConfig
+from pytorch_transformers import BertModel, BertConfig
 
 class BaseLineBLSTM(nn.Module):
     '''
@@ -133,10 +133,10 @@ class XLNetTest(nn.Module):
 class XLNetLSTM(nn.Module):
     def __init__(self, vocab_size, hidden_dim, n_layers, tagset_size):
         super(XLNetLSTM, self).__init__()
-        config = XLNetConfig.from_pretrained('xlnet-large-cased')
-        self.model = XLNetModel(config) 
+        config = BertConfig.from_pretrained('bert-base-multilingual-cased')
+        self.model = BertModel(config) 
 
-        self.decoder = nn.LSTM(1024, hidden_dim,
+        self.decoder = nn.LSTM(768, hidden_dim,
                                n_layers)
 
         self.hiddentotag = nn.Linear(hidden_dim, tagset_size)
