@@ -33,7 +33,7 @@ class POSTrainDataset(Dataset):
         unk_chance (float): Between 0 - 1, probability of changing a word to 'UNK' at train time (To try to account for UNK in validation), default as 0.01
     '''
 
-    def __init__(self, path, dataset_choice='EN', split=0.8, unk_chance=0.05):
+    def __init__(self, path, dataset_choice='EN', split=0.8, unk_chance=0.05, xlnet=False, max_len=80):
         self.path = path
         self.dataset_choice = dataset_choice
         self.itow = {0: 'UNK'}  # Dict to map index to word
@@ -43,12 +43,14 @@ class POSTrainDataset(Dataset):
         self.dataset = []
         self.train = True
         self.unk_chance = unk_chance
+        self.xlnet = xlnet
+        self.max_len = max_len
 
-        # TODO: Might wanna shift it away
-        self.tokenizer = XLNetTokenizer.from_pretrained('xlnet-large-cased')
-        self.tokenizer.keep_accents = True
-        self.tokenizer.remove_space = True
-        self.xlnet = False
+        if self.xlnet:
+            # TODO: Might wanna shift it away
+            self.tokenizer = XLNetTokenizer.from_pretrained('xlnet-large-cased')
+            self.tokenizer.keep_accents = True
+            self.tokenizer.remove_space = True
 
         # Counters to keep track of last used index for mapping
         word_ctr = 1
@@ -80,7 +82,10 @@ class POSTrainDataset(Dataset):
                         tag_ctr += 1
 
                     # Add index of word and index of tag into data and target
-                    data.append(self.wtoi[x])
+                    if self.xlnet:
+                        data.append(x)
+                    else:
+                        data.append(self.wtoi[x])
                     target.append(self.ttoi[y])
 
                 else:
@@ -129,17 +134,32 @@ class POSTrainDataset(Dataset):
 
         # TODO: might wanna change how this work
         if self.xlnet:
-            sentdata = [self.itow[x] for x in data]
             # Manual token to id to fit the way our dataset works
-            inp = []
-            for word in sentdata:
-                if self.tokenizer._convert_token_to_id('▁'+word[0]) != 0:
-                    inp.append(
-                        self.tokenizer._convert_token_to_id('▁'+word[0]))
+            input_ids = self.tokenizer.encode(' '.join(data))
+
+            input_ids = [x for x in input_ids if x != 17]
+            reverse_token = [self.tokenizer._convert_id_to_token(x) for x in input_ids]
+
+            idx_track = []
+            data_pointer = 0
+            token_pointer = 0
+            construct = ''
+            while data_pointer != len(data):
+                if data[data_pointer] in reverse_token[token_pointer]:
+                    idx_track.append(token_pointer)
+                    data_pointer += 1
+                    token_pointer += 1
                 else:
-                    inp.append(self.tokenizer._convert_token_to_id(word[0]))
-            input_ids = torch.tensor(inp)
-            return input_ids, torch.Tensor(target).long()
+                    idx_track.append(token_pointer)
+                    construct = reverse_token[token_pointer]
+                    while True:
+                        token_pointer += 1
+                        construct += reverse_token[token_pointer]
+                        if data[data_pointer] in construct:
+                            construct = ''
+                            data_pointer += 1
+                            break
+            return torch.tensor(input_ids), torch.tensor(idx_track), torch.Tensor(target).long()
         else:
             return torch.Tensor(data).long(), torch.Tensor(target).long()
 
@@ -149,13 +169,13 @@ def train(train_loader, model, optimizer, criterion, device):
     model.train()
     # Iterate through training data
     total_loss = 0
-    for data, target in train_loader:
+    for data, idx, target in train_loader:
         # Send data and target to device (cuda if cuda is available)
-        data, target = data.to(device), target.to(device)
+        data, idx, target = data.to(device), idx.to(device), target.to(device)
         optimizer.zero_grad()
-
         # Get predictions from output
         output = model(data)
+        output = torch.index_select(output, 1, idx[0])
         output = output.transpose(1, 2)
         # Calculate loss
         loss = criterion(output, target)
@@ -179,12 +199,13 @@ def eval(eval_loader, model, criterion, device):
     # Iterate evaluluation data
     # Set no grad
     with torch.no_grad():
-        for data, target in eval_loader:
+        for data, idx, target in eval_loader:
             # Send data and target to device (cuda if cuda is available)
-            data, target = data.to(device), target.to(device)
+            data, idx, target = data.to(device), idx.to(device), target.to(device)
 
             # Get predictions
             output = model(data)
+            output = torch.index_select(output, 1, idx[0])
             output = output.transpose(1, 2)
             # Calculate Loss
             loss = criterion(output, target)
@@ -235,8 +256,8 @@ def main():
     EPOCHS = 500
 
     # Init Train Dataset
-    posdataset = POSTrainDataset(data_dir, unk_chance=0)
-    loader = DataLoader(posdataset, num_workers=1)
+    posdataset = POSTrainDataset(data_dir, unk_chance=0, xlnet=True)
+    loader = DataLoader(posdataset, num_workers=8)
 
     # Criterion to for loss (weighted)
     weighted_loss = torch.ones(len(posdataset.ttoi))
@@ -324,6 +345,7 @@ def main():
         MOMENTUM = 0.9
         WEIGHT_DECAY = 0.0
         ADAMEPS = 1e-8
+        SCHEDULER_GAMMA = 0.95
 
         model = XLNetLSTM(
             len(posdataset.wtoi), HIDDEN_DIM, N_LAYERS, len(posdataset.ttoi))
@@ -337,6 +359,7 @@ def main():
         posdataset.xlnet = True
         optimizer = AdamW(model.parameters(
         ), lr=LEARNING_RATE, eps=ADAMEPS)
+        scheduler = optim.lr_scheduler.ExponentialLR(optimizer, SCHEDULER_GAMMA)
 
     # Implement Early stop
     early_stop = 0
@@ -348,6 +371,7 @@ def main():
     eval_recall = []
     eval_precision = []
     for epoch in range(1, EPOCHS+1):
+        scheduler.step()
         # Toggle Train set
         posdataset.train = True
         trainloss = train(loader, model,
@@ -373,7 +397,7 @@ def main():
         # If loss has stagnate, early stop
         else:
             early_stop += 1
-            if early_stop >= 5:
+            if early_stop >= 99999:
                 print('Early Stopping')
                 break
 
