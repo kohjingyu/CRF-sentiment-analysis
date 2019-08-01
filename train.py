@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 from models import *
 import json
 import copy
-from pytorch_transformers import XLNetTokenizer
+from pytorch_transformers import XLNetTokenizer, AdamW
 
 data_dir = Path("data/")
 output_model_dir = Path("checkpoint/")
@@ -19,8 +19,8 @@ if not os.path.exists(output_model_dir):
 use_cuda = torch.cuda.is_available()
 device = torch.device('cuda' if use_cuda else 'cpu')
 models_set = ['baseline', 'seq2seq', 'attnseq2seq',
-              'xlnettest']  # What models are available
-model_choice = 3  # Choice of model, tallies with models_set
+              'xlnettest', 'xlnetlstm']  # What models are available
+model_choice = 4  # Choice of model, tallies with models_set
 
 
 class POSTrainDataset(Dataset):
@@ -245,8 +245,6 @@ def main():
     for key in posdataset.entities:
         weighted_loss[posdataset.ttoi[key]] = posdataset.entities[key]
     weighted_loss = weighted_loss.to(device)
-    print(posdataset.entities)
-    print(weighted_loss)
     criterion = nn.CrossEntropyLoss(weight=weighted_loss)
 
     if model_choice == 0:
@@ -299,12 +297,12 @@ def main():
 
     elif model_choice == 3:
         # Hyper Parameters
-        EMBEDDING_SIZE = 256
-        HIDDEN_DIM = 128
+        HIDDEN_DIM = 256
         N_LAYERS = 1
-        LEARNING_RATE = 1e-3
+        LEARNING_RATE = 5e-5
         MOMENTUM = 0.9
-        WEIGHT_DECAY = 1e-5
+        WEIGHT_DECAY = 0.0
+        ADAMEPS = 1e-8
 
         model = XLNetTest(
             len(posdataset.wtoi), HIDDEN_DIM, N_LAYERS, len(posdataset.ttoi))
@@ -316,8 +314,30 @@ def main():
 
         # Hackish way
         posdataset.xlnet = True
-        optimizer = optim.SGD(model.parameters(
-        ), lr=LEARNING_RATE, momentum=MOMENTUM, weight_decay=WEIGHT_DECAY)
+        optimizer = AdamW(model.parameters(
+        ), lr=LEARNING_RATE, eps=ADAMEPS)
+
+    elif model_choice == 4:
+        # Hyper Parameters
+        HIDDEN_DIM = 256
+        N_LAYERS = 1
+        LEARNING_RATE = 5e-5
+        MOMENTUM = 0.9
+        WEIGHT_DECAY = 0.0
+        ADAMEPS = 1e-8
+
+        model = XLNetLSTM(
+            len(posdataset.wtoi), HIDDEN_DIM, N_LAYERS, len(posdataset.ttoi))
+        # No grad XLNet
+        for p in model.model.parameters():
+            p.requires_grad = False
+
+        model.to(device)
+
+        # Hackish way
+        posdataset.xlnet = True
+        optimizer = AdamW(model.parameters(
+        ), lr=LEARNING_RATE, eps=ADAMEPS)
 
     # Implement Early stop
     early_stop = 0

@@ -13,8 +13,8 @@ data_dir = Path("data/")
 model_dir = Path("checkpoint/")
 use_cuda = torch.cuda.is_available()
 device = torch.device('cuda' if use_cuda else 'cpu')
-models_set = ['baseline', 'seq2seq', 'attnseq2seq', 'xlnettest']  # What models are available
-model_choice = 3  # Choice of model, tallies with models_set
+models_set = ['baseline', 'seq2seq', 'attnseq2seq', 'xlnettest', 'xlnetlstm']  # What models are available
+model_choice = 4  # Choice of model, tallies with models_set
 ttoi_file = 'ttoi.txt'
 itot_file = 'itot.txt'
 wtoi_file = 'wtoi.txt'
@@ -31,7 +31,7 @@ class POSGenDataset(Dataset):
         dataset_choice (str): 'EN' or 'ES', defaults to 'EN'
     '''
 
-    def __init__(self, path, train_wtoi, train_ttoi, train_itow, dataset_choice='EN'):
+    def __init__(self, path, train_wtoi, train_ttoi, train_itow, dataset_choice='EN', xlnet=False):
         self.path = path
         self.dataset_choice = dataset_choice
         self.wtoi = train_wtoi
@@ -44,7 +44,7 @@ class POSGenDataset(Dataset):
         self.tokenizer = XLNetTokenizer.from_pretrained('xlnet-large-cased')
         self.tokenizer.keep_accents = True
         self.tokenizer.remove_space = True
-        self.xlnet = False
+        self.xlnet = xlnet
 
         with open(self.path / self.dataset_choice / 'dev.in', encoding="utf-8") as f:
             data = []
@@ -62,12 +62,16 @@ class POSGenDataset(Dataset):
                     # Check if word in vocab
                     if x in self.wtoi:
                         # Add index of word if it exist in vocab
-                        # data.append(self.wtoi[x])
-                        data.append(x)
+                        if xlnet:
+                            data.append(x)
+                        else:
+                            data.append(self.wtoi[x])
                     else:
                         # Add index of UNK if it does not
-                        # data.append(self.wtoi['UNK'])
-                        data.append('<unk>')
+                        if xlnet:
+                            data.append('<unk>')
+                        else:
+                            data.append(self.wtoi['UNK'])
 
 
                 else:
@@ -83,7 +87,7 @@ class POSGenDataset(Dataset):
 
         # TODO: might wanna change how this work
         if self.xlnet:
-            sentdata = [self.itow[x] for x in data]
+            sentdata = data
             # Manual token to id to fit the way our dataset works
             inp = []
             for word in sentdata:
@@ -102,7 +106,7 @@ def generate(gen_loader, model, device):
     gen_tag = []
     with torch.no_grad():
         for data in gen_loader:
-            data = data
+            data = data.to(device)
             output = model(data)
             pred = output.argmax(dim=2)
             gen_tag.append(pred)
@@ -125,8 +129,7 @@ if __name__ == '__main__':
         model_dir / '{}.pt'.format(models_set[model_choice]), map_location=device)
     model.to(device)
 
-    posgendata = POSGenDataset(data_dir, wtoi, ttoi, itow)
-    posgendata.xlnet=True
+    posgendata = POSGenDataset(data_dir, wtoi, ttoi, itow, xlnet=True)
     gen_loader = DataLoader(posgendata)
 
     gen_tag = generate(gen_loader, model, device)
