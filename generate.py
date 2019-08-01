@@ -87,16 +87,37 @@ class POSGenDataset(Dataset):
 
         # TODO: might wanna change how this work
         if self.xlnet:
-            sentdata = data
             # Manual token to id to fit the way our dataset works
-            inp = []
-            for word in sentdata:
-                if self.tokenizer._convert_token_to_id('▁'+word[0]) != 0:
-                    inp.append(self.tokenizer._convert_token_to_id('▁'+word[0]))
+            input_ids = self.tokenizer.encode(' '.join(data))
+
+            input_ids = [x for x in input_ids if x != 17]
+            reverse_token = [self.tokenizer._convert_id_to_token(x) for x in input_ids]
+
+            idx_track = []
+            data_pointer = 0
+            token_pointer = 0
+            construct = ''
+            while data_pointer < len(data) and token_pointer < len(reverse_token):
+                if data[data_pointer] in reverse_token[token_pointer]:
+                    idx_track.append(token_pointer)
+                    data_pointer += 1
+                    token_pointer += 1
                 else:
-                    inp.append(self.tokenizer._convert_token_to_id(word[0]))
-            input_ids = torch.tensor(inp)
-            return input_ids
+                    idx_track.append(token_pointer)
+                    construct = reverse_token[token_pointer]
+                    while True:
+                        token_pointer += 1
+                        construct += reverse_token[token_pointer]
+                        if data_pointer < len(data)-1:
+                            if data[data_pointer+1] in reverse_token[token_pointer]:
+                                construct = ''
+                                data_pointer += 1
+                                break
+                        if data[data_pointer] in construct:
+                            construct = ''
+                            data_pointer += 1
+                            break
+            return torch.tensor(input_ids), torch.tensor(idx_track)
         else:
             return torch.Tensor(data).long()
 
@@ -105,9 +126,10 @@ def generate(gen_loader, model, device):
     model.eval()
     gen_tag = []
     with torch.no_grad():
-        for data in gen_loader:
-            data = data.to(device)
+        for data, idx in gen_loader:
+            data, idx = data.to(device), idx.to(device)
             output = model(data)
+            output = torch.index_select(output, 1, idx[0])
             pred = output.argmax(dim=2)
             gen_tag.append(pred)
     return gen_tag

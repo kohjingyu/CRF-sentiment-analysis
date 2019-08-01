@@ -49,8 +49,6 @@ class POSTrainDataset(Dataset):
         if self.xlnet:
             # TODO: Might wanna shift it away
             self.tokenizer = XLNetTokenizer.from_pretrained('xlnet-large-cased')
-            self.tokenizer.keep_accents = True
-            self.tokenizer.remove_space = True
 
         # Counters to keep track of last used index for mapping
         word_ctr = 1
@@ -144,7 +142,7 @@ class POSTrainDataset(Dataset):
             data_pointer = 0
             token_pointer = 0
             construct = ''
-            while data_pointer != len(data):
+            while data_pointer < len(data) and token_pointer < len(reverse_token):
                 if data[data_pointer] in reverse_token[token_pointer]:
                     idx_track.append(token_pointer)
                     data_pointer += 1
@@ -155,6 +153,11 @@ class POSTrainDataset(Dataset):
                     while True:
                         token_pointer += 1
                         construct += reverse_token[token_pointer]
+                        if data_pointer < len(data)-1:
+                            if data[data_pointer+1] in reverse_token[token_pointer]:
+                                construct = ''
+                                data_pointer += 1
+                                break
                         if data[data_pointer] in construct:
                             construct = ''
                             data_pointer += 1
