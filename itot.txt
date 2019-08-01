@@ -1,1 +1,0 @@
-{"0": "O", "1": "B-positive", "2": "B-negative", "3": "I-positive", "4": "B-neutral", "5": "I-neutral", "6": "I-negative"}
