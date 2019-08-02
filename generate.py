@@ -7,7 +7,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from models import *
 import json
-from pytorch_transformers import XLNetTokenizer
+from pytorch_transformers import BertTokenizer
 
 data_dir = Path("data/")
 model_dir = Path("checkpoint/")
@@ -41,9 +41,7 @@ class POSGenDataset(Dataset):
         self.true_word = []
 
         # TODO: Might wanna shift it away
-        self.tokenizer = XLNetTokenizer.from_pretrained('xlnet-large-cased')
-        self.tokenizer.keep_accents = True
-        self.tokenizer.remove_space = True
+        self.tokenizer = BertTokenizer.from_pretrained('bert-base-multilingual-cased', do_lower_case = False)
         self.xlnet = xlnet
 
         with open(self.path / self.dataset_choice / 'dev.in', encoding="utf-8") as f:
@@ -60,18 +58,18 @@ class POSGenDataset(Dataset):
 
                     # Add index of word and index of tag into data and target
                     # Check if word in vocab
-                    if x in self.wtoi:
+                    # if x in self.wtoi:
                         # Add index of word if it exist in vocab
-                        if xlnet:
-                            data.append(x)
-                        else:
-                            data.append(self.wtoi[x])
+                    if xlnet:
+                        data.append(x)
                     else:
-                        # Add index of UNK if it does not
-                        if xlnet:
-                            data.append('<unk>')
-                        else:
-                            data.append(self.wtoi['UNK'])
+                        data.append(self.wtoi[x])
+                    # else:
+                    #     # Add index of UNK if it does not
+                    #     if xlnet:
+                    #         data.append('<unk>')
+                    #     else:
+                    #         data.append(self.wtoi['UNK'])
 
 
                 else:
@@ -87,16 +85,59 @@ class POSGenDataset(Dataset):
 
         # TODO: might wanna change how this work
         if self.xlnet:
-            sentdata = data
             # Manual token to id to fit the way our dataset works
-            inp = []
-            for word in sentdata:
-                if self.tokenizer._convert_token_to_id('▁'+word[0]) != 0:
-                    inp.append(self.tokenizer._convert_token_to_id('▁'+word[0]))
+            input_ids = self.tokenizer.encode(' '.join(data))
+
+            input_ids = [x for x in input_ids if x != 17]
+            reverse_token = [self.tokenizer._convert_id_to_token(x) for x in input_ids]
+
+            idx_track = []
+            ctr = 0
+            construct = ''
+            first = True
+            for i in range(len(reverse_token)):
+                if reverse_token[i] == data[ctr] or reverse_token[i] == '[UNK]':
+                    idx_track.append(i)
+                    ctr += 1
                 else:
-                    inp.append(self.tokenizer._convert_token_to_id(word[0]))
-            input_ids = torch.tensor(inp)
-            return input_ids
+                    if first:
+                        idx_track.append(i)
+                        first = False
+                    if reverse_token[i].startswith('#'):
+                        construct += reverse_token[i][2:]
+                    else:
+                        construct += reverse_token[i]
+                    
+                    if construct == data[ctr]:
+                        ctr += 1
+                        construct = ''
+                        first = True
+
+            # idx_track = []
+            # data_pointer = 0
+            # token_pointer = 0
+            # construct = ''
+            # while data_pointer < len(data) and token_pointer < len(reverse_token):
+            #     if data[data_pointer] in reverse_token[token_pointer]:
+            #         idx_track.append(token_pointer)
+            #         data_pointer += 1
+            #         token_pointer += 1
+            #     else:
+            #         idx_track.append(token_pointer)
+            #         construct = reverse_token[token_pointer]
+            #         while True:
+            #             token_pointer += 1
+            #             construct += reverse_token[token_pointer]
+            #             if data_pointer < len(data)-1:
+            #                 if data[data_pointer+1] in reverse_token[token_pointer]:
+            #                     construct = ''
+            #                     data_pointer += 1
+            #                     break
+            #             if data[data_pointer] in construct:
+            #                 construct = ''
+            #                 data_pointer += 1
+            #                 break
+            return torch.tensor(input_ids), torch.tensor(idx_track)
         else:
             return torch.Tensor(data).long()
 
@@ -105,9 +146,10 @@ def generate(gen_loader, model, device):
     model.eval()
     gen_tag = []
     with torch.no_grad():
-        for data in gen_loader:
-            data = data.to(device)
+        for data, idx in gen_loader:
+            data, idx = data.to(device), idx.to(device)
             output = model(data)
+            output = torch.index_select(output, 1, idx[0])
             pred = output.argmax(dim=2)
             gen_tag.append(pred)
     return gen_tag
@@ -128,6 +170,7 @@ if __name__ == '__main__':
     model = torch.load(
         model_dir / '{}.pt'.format(models_set[model_choice]), map_location=device)
     model.to(device)
+    print(model)
 
     posgendata = POSGenDataset(data_dir, wtoi, ttoi, itow, xlnet=True)
     gen_loader = DataLoader(posgendata)
