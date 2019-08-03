@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from pytorch_transformers import BertModel, BertConfig
 
+
 class BaseLineBLSTM(nn.Module):
     '''
     Baseline Bi-directional LSTM Model to check what we expect to see when using a Bi-directional LSTM
@@ -107,34 +108,36 @@ class AttentionSeq2Seq(nn.Module):
 
         return tag_scores
 
-class XLNetTest(nn.Module):
-    def __init__(self, vocab_size, hidden_dim, n_layers, tagset_size):
-        super(XLNetTest, self).__init__()
-        config = XLNetConfig.from_pretrained('xlnet-large-cased')
-        self.model = XLNetModel(config) 
+# Deprecated
+# class XLNetTest(nn.Module):
+#     def __init__(self, vocab_size, hidden_dim, n_layers, tagset_size):
+#         super(XLNetTest, self).__init__()
+#         config = XLNetConfig.from_pretrained('xlnet-large-cased')
+#         self.model = XLNetModel(config)
 
-        # self.decoder = nn.LSTM(1024, hidden_dim,
-        #                        n_layers)
+#         # self.decoder = nn.LSTM(1024, hidden_dim,
+#         #                        n_layers)
 
-        self.hiddentotag = nn.Linear(1024, tagset_size)
+#         self.hiddentotag = nn.Linear(1024, tagset_size)
 
-    def forward(self, x):
-        # No grad the XLNet
-        with torch.no_grad():
-            outputs = self.model(x)[0]
+#     def forward(self, x):
+#         # No grad the XLNet
+#         with torch.no_grad():
+#             outputs = self.model(x)[0]
 
-        # lstm_out, _ = self.decoder(outputs)
+#         # lstm_out, _ = self.decoder(outputs)
 
-        tag_space = self.hiddentotag(outputs)
-        tag_scores = F.softmax(tag_space, dim=2)
+#         tag_space = self.hiddentotag(outputs)
+#         tag_scores = F.softmax(tag_space, dim=2)
 
-        return tag_scores
+#         return tag_scores
 
-class XLNetLSTM(nn.Module):
-    def __init__(self, vocab_size, hidden_dim, n_layers, tagset_size):
-        super(XLNetLSTM, self).__init__()
+
+class BertLSTM(nn.Module):
+    def __init__(self, hidden_dim, n_layers, tagset_size):
+        super(BertLSTM, self).__init__()
         config = BertConfig.from_pretrained('bert-base-multilingual-cased')
-        self.model = BertModel(config) 
+        self.model = BertModel(config)
 
         self.decoder = nn.LSTM(768, hidden_dim,
                                n_layers)

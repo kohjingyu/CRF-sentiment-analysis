@@ -18,9 +18,9 @@ if not os.path.exists(output_model_dir):
     os.mkdir(output_model_dir)
 use_cuda = torch.cuda.is_available()
 device = torch.device('cuda' if use_cuda else 'cpu')
-models_set = ['baseline', 'seq2seq', 'attnseq2seq',
-              'xlnettest', 'xlnetlstm']  # What models are available
-model_choice = 4  # Choice of model, tallies with models_set
+# What models are available
+models_set = ['baseline', 'seq2seq', 'attnseq2seq']
+model_choice = 0  # Choice of model, tallies with models_set
 
 
 class POSTrainDataset(Dataset):
@@ -33,7 +33,7 @@ class POSTrainDataset(Dataset):
         unk_chance (float): Between 0 - 1, probability of changing a word to 'UNK' at train time (To try to account for UNK in validation), default as 0.01
     '''
 
-    def __init__(self, path, dataset_choice='EN', split=0.8, unk_chance=0.05, xlnet=False, max_len=80):
+    def __init__(self, path, dataset_choice='EN', split=0.8, unk_chance=0.05):
         self.path = path
         self.dataset_choice = dataset_choice
         self.itow = {0: 'UNK'}  # Dict to map index to word
@@ -43,12 +43,6 @@ class POSTrainDataset(Dataset):
         self.dataset = []
         self.train = True
         self.unk_chance = unk_chance
-        self.xlnet = xlnet
-        self.max_len = max_len
-
-        if self.xlnet:
-            # TODO: Might wanna shift it away
-            self.tokenizer = BertTokenizer.from_pretrained('bert-base-multilingual-cased', do_lower_case = False)
 
         # Counters to keep track of last used index for mapping
         word_ctr = 1
@@ -80,10 +74,7 @@ class POSTrainDataset(Dataset):
                         tag_ctr += 1
 
                     # Add index of word and index of tag into data and target
-                    if self.xlnet:
-                        data.append(x)
-                    else:
-                        data.append(self.wtoi[x])
+                    data.append(self.wtoi[x])
                     target.append(self.ttoi[y])
 
                 else:
@@ -130,65 +121,7 @@ class POSTrainDataset(Dataset):
         else:
             data, target = self.val_data[idx]
 
-        # TODO: might wanna change how this work
-        if self.xlnet:
-            # Manual token to id to fit the way our dataset works
-            input_ids = self.tokenizer.encode(' '.join(data))
-
-            # input_ids = [x for x in input_ids if x != 17]
-            reverse_token = [self.tokenizer._convert_id_to_token(x) for x in input_ids]
-
-            idx_track = []
-            ctr = 0
-            construct = ''
-            first = True
-            for i in range(len(reverse_token)):
-                if reverse_token[i] == data[ctr] or reverse_token[i] == '[UNK]':
-                    idx_track.append(i)
-                    ctr += 1
-                else:
-                    if first:
-                        idx_track.append(i)
-                        first = False
-                    if reverse_token[i].startswith('#'):
-                        construct += reverse_token[i][2:]
-                    else:
-                        construct += reverse_token[i]
-                    
-                    if construct == data[ctr]:
-                        ctr += 1
-                        construct = ''
-                        first = True
-            # print(data)
-            # print(reverse_token)
-            # print(idx_track)
-            # idx_track = []
-            # data_pointer = 0
-            # token_pointer = 0
-            # construct = ''
-            # while data_pointer < len(data) and token_pointer < len(reverse_token):
-            #     if data[data_pointer] in reverse_token[token_pointer]:
-            #         idx_track.append(token_pointer)
-            #         data_pointer += 1
-            #         token_pointer += 1
-            #     else:
-            #         idx_track.append(token_pointer)
-            #         construct = reverse_token[token_pointer]
-            #         while True:
-            #             token_pointer += 1
-            #             construct += reverse_token[token_pointer]
-            #             if data_pointer < len(data)-1:
-            #                 if data[data_pointer+1] in reverse_token[token_pointer]:
-            #                     construct = ''
-            #                     data_pointer += 1
-            #                     break
-            #             if data[data_pointer] in construct:
-            #                 construct = ''
-            #                 data_pointer += 1
-            #                 break
-            return torch.tensor(input_ids), torch.tensor(idx_track), torch.Tensor(target).long()
-        else:
-            return torch.Tensor(data).long(), torch.Tensor(target).long()
+        return torch.Tensor(data).long(), torch.Tensor(target).long()
 
 
 def train(train_loader, model, optimizer, criterion, device):
@@ -196,15 +129,13 @@ def train(train_loader, model, optimizer, criterion, device):
     model.train()
     # Iterate through training data
     total_loss = 0
-    for data, idx, target in train_loader:
+    for data, target in train_loader:
         # Send data and target to device (cuda if cuda is available)
-        data, idx, target = data.to(device), idx.to(device), target.to(device)
+        data, target = data.to(device), target.to(device)
         optimizer.zero_grad()
         # Get predictions from output
         output = model(data)
-        output = torch.index_select(output, 1, idx[0])
         output = output.transpose(1, 2)
-        print(output.size())
         # Calculate loss
         loss = criterion(output, target)
         total_loss += loss.item()
@@ -227,13 +158,12 @@ def eval(eval_loader, model, criterion, device):
     # Iterate evaluluation data
     # Set no grad
     with torch.no_grad():
-        for data, idx, target in eval_loader:
+        for data, target in eval_loader:
             # Send data and target to device (cuda if cuda is available)
-            data, idx, target = data.to(device), idx.to(device), target.to(device)
+            data, target = data.to(device), target.to(device)
 
             # Get predictions
             output = model(data)
-            output = torch.index_select(output, 1, idx[0])
             output = output.transpose(1, 2)
             # Calculate Loss
             loss = criterion(output, target)
@@ -244,7 +174,8 @@ def eval(eval_loader, model, criterion, device):
                 if target[0][i].item() not in stats:
                     stats[target[0][i].item()] = {'TP': 0, 'FP': 0, 'FN': 0}
                 if pred[0][i].item() == target[0][i].item():
-                    total_correct += 1
+                    if target[0][i].item() != 'O':
+                        total_correct += 1
                     if pred[0][i].item() not in stats:
                         stats[pred[0][i].item()] = {'TP': 0, 'FP': 0, 'FN': 0}
                     stats[pred[0][i].item()]['TP'] += 1
@@ -284,7 +215,7 @@ def main():
     EPOCHS = 500
 
     # Init Train Dataset
-    posdataset = POSTrainDataset(data_dir, unk_chance=0, xlnet=True)
+    posdataset = POSTrainDataset(data_dir)
     loader = DataLoader(posdataset)
 
     # Criterion to for loss (weighted)
@@ -343,52 +274,6 @@ def main():
         optimizer = optim.SGD(model.parameters(
         ), lr=LEARNING_RATE, momentum=MOMENTUM, weight_decay=WEIGHT_DECAY)
 
-    elif model_choice == 3:
-        # Hyper Parameters
-        HIDDEN_DIM = 256
-        N_LAYERS = 1
-        LEARNING_RATE = 5e-5
-        MOMENTUM = 0.9
-        WEIGHT_DECAY = 0.0
-        ADAMEPS = 1e-8
-
-        model = XLNetTest(
-            len(posdataset.wtoi), HIDDEN_DIM, N_LAYERS, len(posdataset.ttoi))
-        # No grad XLNet
-        for p in model.model.parameters():
-            p.requires_grad = False
-
-        model.to(device)
-
-        # Hackish way
-        posdataset.xlnet = True
-        optimizer = AdamW(model.parameters(
-        ), lr=LEARNING_RATE, eps=ADAMEPS)
-
-    elif model_choice == 4:
-        # Hyper Parameters
-        HIDDEN_DIM = 256
-        N_LAYERS = 1
-        LEARNING_RATE = 5e-5
-        MOMENTUM = 0.9
-        WEIGHT_DECAY = 0.0
-        ADAMEPS = 1e-8
-        SCHEDULER_GAMMA = 0.95
-
-        model = XLNetLSTM(
-            len(posdataset.wtoi), HIDDEN_DIM, N_LAYERS, len(posdataset.ttoi))
-        # No grad XLNet
-        for p in model.model.parameters():
-            p.requires_grad = False
-
-        model.to(device)
-
-        # Hackish way
-        posdataset.xlnet = True
-        optimizer = AdamW(model.parameters(
-        ), lr=LEARNING_RATE, eps=ADAMEPS)
-        scheduler = optim.lr_scheduler.ExponentialLR(optimizer, SCHEDULER_GAMMA)
-
     # Implement Early stop
     early_stop = 0
 
@@ -399,7 +284,6 @@ def main():
     eval_recall = []
     eval_precision = []
     for epoch in range(1, EPOCHS+1):
-        scheduler.step()
         # Toggle Train set
         posdataset.train = True
         trainloss = train(loader, model,
