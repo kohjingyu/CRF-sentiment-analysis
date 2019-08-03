@@ -4,3 +4,8 @@ data/
 .ipynb_checkpoints
 checkpoint/
 *.png
+ttoi.txt
+wtoi.txt
+itot.txt
+itow.txt
+__pycache__/

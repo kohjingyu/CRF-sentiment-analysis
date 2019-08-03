@@ -111,9 +111,9 @@ def generate(gen_loader, model, device, split_words):
                 reform = []
                 for i in range(len(idx[0])):
                     if i != len(idx[0])-2:
-                        reform.append(output[:, idx[0][i:i+1], :])
+                        reform.append(torch.mean(output[:, idx[0][i:i+2], :], 1, True))
                     else:
-                        reform.append(output[:, idx[0][i:i+1], :])
+                        reform.append(torch.mean(output[:, idx[0][i:], :], 1, True))
                 output = torch.cat(reform, dim=1)
             pred = output.argmax(dim=2)
             gen_tag.append(pred)

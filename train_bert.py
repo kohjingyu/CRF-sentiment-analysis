@@ -173,9 +173,9 @@ def train(train_loader, model, optimizer, criterion, device, split_words):
             reform = []
             for i in range(len(idx[0])):
                 if i != len(idx[0])-2:
-                    reform.append(output[:, idx[0][i:i+1], :])
+                    reform.append(torch.mean(output[:, idx[0][i:i+2], :], 1, True))
                 else:
-                    reform.append(output[:, idx[0][i:i+1], :])
+                    reform.append(torch.mean(output[:, idx[0][i:], :], 1, True))
             output = torch.cat(reform, dim=1)
         output = output.transpose(1, 2)
         # Calculate loss
@@ -214,9 +214,9 @@ def eval(eval_loader, model, criterion, device, split_words):
                 reform = []
                 for i in range(len(idx[0])):
                     if i != len(idx[0])-2:
-                        reform.append(output[:, idx[0][i:i+1], :])
+                        reform.append(torch.mean(output[:, idx[0][i:i+2], :], 1, True))
                     else:
-                        reform.append(output[:, idx[0][i:i+1], :])
+                        reform.append(torch.mean(output[:, idx[0][i:], :], 1, True))
                 output = torch.cat(reform, dim=1)
             output = output.transpose(1, 2)
             # Calculate Loss
