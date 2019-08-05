@@ -8,6 +8,8 @@ import os
 import random
 import matplotlib.pyplot as plt
 from models import *
+from bert_bilstm_crf import BERT_BiLSTM_CRF
+
 import json
 import copy
 from pytorch_transformers import BertTokenizer, AdamW
@@ -22,6 +24,9 @@ models_set = ['bertlstm']  # What models are available
 model_choice = 0  # Choice of model, tallies with models_set
 
 
+START_TAG = "<START>"
+STOP_TAG = "<STOP>"
+
 class POSTrainDataset(Dataset):
     '''
     Part Of Speech Tagging Train Dataset
@@ -35,10 +40,10 @@ class POSTrainDataset(Dataset):
     def __init__(self, path, dataset_choice='EN', split=0.8, unk_chance=0.05):
         self.path = path
         self.dataset_choice = dataset_choice
-        self.itow = {0: 'UNK'}  # Dict to map index to word
-        self.wtoi = {'UNK': 0}  # Dict to map word to index
-        self.itot = {}  # Dict to map index to tag
-        self.ttoi = {}  # Dict to map tag to index
+        self.itow = {0: 'UNK', 1: START_TAG, 2: STOP_TAG}  # Dict to map index to word
+        self.wtoi = {'UNK': 0, START_TAG: 1, STOP_TAG: 2}  # Dict to map word to index
+        self.itot = {0: START_TAG, 1: STOP_TAG}  # Dict to map index to tag
+        self.ttoi = {START_TAG: 0, STOP_TAG: 1}  # Dict to map tag to index
         self.dataset = []
         self.train = True
         self.unk_chance = unk_chance
@@ -47,8 +52,8 @@ class POSTrainDataset(Dataset):
             'bert-base-multilingual-cased', do_lower_case=False)
 
         # Counters to keep track of last used index for mapping
-        word_ctr = 1
-        tag_ctr = 0
+        word_ctr = len(self.wtoi)
+        tag_ctr = len(self.itot)
         # Read Data from path
         with open(self.path / self.dataset_choice / 'train', encoding="utf-8") as f:
             data = []
@@ -166,24 +171,13 @@ def train(train_loader, model, optimizer, criterion, device, split_words):
         data, idx, target = data.to(device), idx.to(device), target.to(device)
         optimizer.zero_grad()
         # Get predictions from output
-        output = model(data)
-        if split_words == 'first':
-            output = torch.index_select(output, 1, idx[0])
-        else:
-            reform = []
-            for i in range(len(idx[0])):
-                if i != len(idx[0])-2:
-                    reform.append(torch.mean(output[:, idx[0][i:i+2], :], 1, True))
-                else:
-                    reform.append(torch.mean(output[:, idx[0][i:], :], 1, True))
-            output = torch.cat(reform, dim=1)
-        output = output.transpose(1, 2)
-        # Calculate loss
-        loss = criterion(output, target)
+        loss = model.neg_log_likelihood(data, idx, target)
         total_loss += loss.item()
+
         # Update Model
         loss.backward()
         optimizer.step()
+
     return total_loss/len(train_loader)
 
 
@@ -207,40 +201,31 @@ def eval(eval_loader, model, criterion, device, split_words):
                 device), target.to(device)
 
             # Get predictions
-            output = model(data)
-            if split_words == 'first':
-                output = torch.index_select(output, 1, idx[0])
-            else:
-                reform = []
-                for i in range(len(idx[0])):
-                    if i != len(idx[0])-2:
-                        reform.append(torch.mean(output[:, idx[0][i:i+2], :], 1, True))
-                    else:
-                        reform.append(torch.mean(output[:, idx[0][i:], :], 1, True))
-                output = torch.cat(reform, dim=1)
-            output = output.transpose(1, 2)
+            # Get predictions
+            score, pred = model(data, idx)
+
             # Calculate Loss
-            loss = criterion(output, target)
+            loss = model.neg_log_likelihood(data, idx, target)
+
             total_loss += loss.item()
-            pred = output.argmax(dim=1)
             for i in range(len(pred)):
                 total_constituents += 1
                 if target[0][i].item() not in stats:
                     stats[target[0][i].item()] = {'TP': 0, 'FP': 0, 'FN': 0}
-                if pred[0][i].item() == target[0][i].item():
-                    if target[0][i].item() != 'O':
-                        total_correct += 1
-                    if pred[0][i].item() not in stats:
-                        stats[pred[0][i].item()] = {'TP': 0, 'FP': 0, 'FN': 0}
-                    stats[pred[0][i].item()]['TP'] += 1
-                if pred[0][i].item() != target[0][i].item():
-                    if pred[0][i].item() not in stats:
-                        stats[pred[0][i].item()] = {'TP': 0, 'FP': 0, 'FN': 0}
+                if pred[i] == target[0][i].item():
+                    total_correct += 1
+                    if pred[i] not in stats:
+                        stats[pred[i]] = {'TP': 0, 'FP': 0, 'FN': 0}
+                    stats[pred[i]]['TP'] += 1
+                if pred[i] != target[0][i].item():
+                    if pred[i] not in stats:
+                        stats[pred[i]] = {'TP': 0, 'FP': 0, 'FN': 0}
                     if target[0][i].item() not in stats:
                         stats[target[0][i].item()] = {
                             'TP': 0, 'FP': 0, 'FN': 0}
-                    stats[pred[0][i].item()]['FP'] += 1
+                    stats[pred[i]]['FP'] += 1
                     stats[target[0][i].item()]['FN'] += 1
+
 
     avg_precision = []
     avg_recall = []
@@ -290,7 +275,7 @@ def main():
         ADAMEPS = 1e-8
         SCHEDULER_GAMMA = 0.95
 
-        model = BertLSTM(HIDDEN_DIM, N_LAYERS, len(posdataset.ttoi))
+        model = BERT_BiLSTM_CRF(len(posdataset.wtoi), posdataset.ttoi, HIDDEN_DIM, N_LAYERS)
         # No grad Bert layer
         for p in model.model.parameters():
             p.requires_grad = False
@@ -326,7 +311,7 @@ def main():
         eval_recall.append(recall)
         eval_precision.append(precision)
         print('Epoch {}, Training Loss: {}, Evaluation Loss: {}, Evaluation Accuracy: {}, Evaluation Precision: {}, Evaluation Recall: {}'.format(
-            epoch, trainloss, loss, accuracy, precision, recall))
+            epoch, trainloss, loss, accuracy, precision, recall), flush=True)
 
         # Check if current loss is better than previous
         if loss < best_loss:
