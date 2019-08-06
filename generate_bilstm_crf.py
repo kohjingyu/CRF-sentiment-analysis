@@ -13,13 +13,8 @@ data_dir = Path("data/")
 model_dir = Path("checkpoint/")
 use_cuda = torch.cuda.is_available()
 device = torch.device('cuda' if use_cuda else 'cpu')
-models_set = ['bertlstm']  # What models are available
-model_choice = 0  # Choice of model, tallies with models_set
-ttoi_file = 'ttoi.txt'
+model_name = 'bertlstm'  # What models are available
 itot_file = 'itot.txt'
-wtoi_file = 'wtoi.txt'
-itow_file = 'itow.txt'
-
 
 class POSGenDataset(Dataset):
     '''
@@ -110,13 +105,23 @@ def generate(gen_loader, model, device, split_words):
 
 
 if __name__ == '__main__':
+    if len(sys.argv) < 2:
+        print("Usage: python generate_bilstm_crf.py modelname")
+        exit()
+
+    model_name = sys.argv[1]
+    
+    output_dir = "preds"
+    if not os.path.exists(output_dir):
+        os.mkdir(output_dir)
+
     # Open indexing files
     with open(itot_file, 'r', encoding="utf-8") as f:
         itot = json.load(f)
 
     # Load model
     model = torch.load(
-        model_dir / '{}.pt'.format(models_set[model_choice]), map_location=device)
+        model_dir / '{}.pt'.format(model_name), map_location=device)
     model.to(device)
 
     SPLIT_WORDS = 'first'
@@ -126,7 +131,7 @@ if __name__ == '__main__':
 
     gen_tag = generate(gen_loader, model, device, SPLIT_WORDS)
     ctr = 0
-    with open('dev.p5.out', 'w', encoding="utf-8") as f:
+    with open(f'{output_dir}/{model_name}_dev.p5.out', 'w', encoding="utf-8") as f:
         for sentence in gen_tag:
             for i in range(len(sentence)):
                 f.write('{} {}\n'.format(

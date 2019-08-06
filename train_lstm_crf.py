@@ -9,10 +9,22 @@ import random
 import matplotlib.pyplot as plt
 from models import *
 from bert_bilstm_crf import BERT_BiLSTM_CRF
+from bilstm_crf import BiLSTM_CRF
 
 import json
 import copy
 from pytorch_transformers import BertTokenizer, AdamW
+
+import argparse
+
+parser = argparse.ArgumentParser(description='Run a deep learning model with CRF for POS tagging.')
+parser.add_argument('--hidden', default=1024, type=int, help='hidden dim of lstm')
+parser.add_argument('--nlayers', default=1, type=int, help='number of layers in the lstm')
+parser.add_argument('--lr', default=5e-5, type=float, help='learning rate for AdamW optimizer')
+parser.add_argument('--arch', default="bertlstm", type=str, help='')
+
+args = parser.parse_args()
+print(args)
 
 data_dir = Path("data/")
 output_model_dir = Path("checkpoint/")
@@ -20,12 +32,19 @@ if not os.path.exists(output_model_dir):
     os.mkdir(output_model_dir)
 use_cuda = torch.cuda.is_available()
 device = torch.device('cuda' if use_cuda else 'cpu')
-models_set = ['bertlstm']  # What models are available
-model_choice = 0  # Choice of model, tallies with models_set
-
 
 START_TAG = "<START>"
 STOP_TAG = "<STOP>"
+
+model_architecture = args.arch # ["bertlstm", "bilstm"]
+assert(model_architecture in ["bertlstm", "bilstm"])
+
+# Hyper Parameters
+HIDDEN_DIM = args.hidden
+N_LAYERS = args.nlayers
+LEARNING_RATE = args.lr
+ADAMEPS = 1e-8
+SCHEDULER_GAMMA = 0.95
 
 class POSTrainDataset(Dataset):
     '''
@@ -81,7 +100,11 @@ class POSTrainDataset(Dataset):
                         tag_ctr += 1
 
                     # Add index of word and index of tag into data and target
-                    data.append(x)
+                    if model_architecture == "bilstm":
+                        data.append(self.wtoi[x])
+                    else:
+                        data.append(x)
+
                     target.append(self.ttoi[y])
 
                 else:
@@ -104,14 +127,9 @@ class POSTrainDataset(Dataset):
         random.shuffle(self.dataset)
         self.train_data = self.dataset[:int(len(self.dataset)*split)]
         self.val_data = self.dataset[int(len(self.dataset)*split):]
-        with open('wtoi.txt', 'w', encoding="utf-8") as f:
-            json.dump(self.wtoi, f)
-        with open('ttoi.txt', 'w', encoding="utf-8") as f:
-            json.dump(self.ttoi, f)
+
         with open('itot.txt', 'w', encoding="utf-8") as f:
             json.dump(self.itot, f)
-        with open('itow.txt', 'w', encoding="utf-8") as f:
-            json.dump(self.itow, f)
 
     def __len__(self):
         if self.train:
@@ -128,36 +146,39 @@ class POSTrainDataset(Dataset):
         else:
             data, target = self.val_data[idx]
 
-        # Manual token to id to fit the way our dataset works
-        input_ids = self.tokenizer.encode(' '.join(data))
+        if model_architecture == "bilstm":
+            return torch.tensor(data).long(), torch.tensor(target).long()
+        else:
+            # Manual token to id to fit the way our dataset works
+            input_ids = self.tokenizer.encode(' '.join(data))
 
-        reverse_token = [
-            self.tokenizer._convert_id_to_token(x) for x in input_ids]
+            reverse_token = [
+                self.tokenizer._convert_id_to_token(x) for x in input_ids]
 
-        # Find the respective starting index of each word
-        idx_track = []
-        ctr = 0
-        construct = ''
-        first = True
-        for i in range(len(reverse_token)):
-            if reverse_token[i] == data[ctr] or reverse_token[i] == '[UNK]':
-                idx_track.append(i)
-                ctr += 1
-            else:
-                if first:
+            # Find the respective starting index of each word
+            idx_track = []
+            ctr = 0
+            construct = ''
+            first = True
+            for i in range(len(reverse_token)):
+                if reverse_token[i] == data[ctr] or reverse_token[i] == '[UNK]':
                     idx_track.append(i)
-                    first = False
-                if reverse_token[i].startswith('#'):
-                    construct += reverse_token[i][2:]
-                else:
-                    construct += reverse_token[i]
-
-                if construct == data[ctr]:
                     ctr += 1
-                    construct = ''
-                    first = True
+                else:
+                    if first:
+                        idx_track.append(i)
+                        first = False
+                    if reverse_token[i].startswith('#'):
+                        construct += reverse_token[i][2:]
+                    else:
+                        construct += reverse_token[i]
 
-        return torch.tensor(input_ids), torch.tensor(idx_track), torch.Tensor(target).long()
+                    if construct == data[ctr]:
+                        ctr += 1
+                        construct = ''
+                        first = True
+
+            return torch.tensor(input_ids), torch.tensor(idx_track), torch.Tensor(target).long()
 
 
 def train(train_loader, model, optimizer, criterion, device, split_words):
@@ -166,12 +187,20 @@ def train(train_loader, model, optimizer, criterion, device, split_words):
     model.train()
     # Iterate through training data
     total_loss = 0
-    for data, idx, target in train_loader:
-        # Send data and target to device (cuda if cuda is available)
-        data, idx, target = data.to(device), idx.to(device), target.to(device)
+    for train_data in train_loader:
         optimizer.zero_grad()
-        # Get predictions from output
-        loss = model.neg_log_likelihood(data, idx, target)
+
+        if model_architecture == "bilstm":
+            data, target = train_data
+            data, target = data.to(device), target.to(device)
+            # Get predictions from output
+            loss = model.neg_log_likelihood(data, target)
+        else:
+            data, idx, target = train_data
+            data, idx, target = data.to(device), idx.to(device), target.to(device)
+            # Get predictions from output
+            loss = model.neg_log_likelihood(data, idx, target)
+
         total_loss += loss.item()
 
         # Update Model
@@ -195,17 +224,26 @@ def eval(eval_loader, model, criterion, device, split_words):
     # Iterate evaluluation data
     # Set no grad
     with torch.no_grad():
-        for data, idx, target in eval_loader:
-            # Send data and target to device (cuda if cuda is available)
-            data, idx, target = data.to(device), idx.to(
-                device), target.to(device)
+        for eval_data in eval_loader:
+            if model_architecture == "bilstm":
+                data, target = eval_data
+                # Send data and target to device (cuda if cuda is available)
+                data, target = data.to(device), target.to(device)
+                score, pred = model(data)
 
-            # Get predictions
-            # Get predictions
-            score, pred = model(data, idx)
+                # Calculate Loss
+                loss = model.neg_log_likelihood(data, target)
+            else:
+                data, idx, target = eval_data
+                # Send data and target to device (cuda if cuda is available)
+                data, idx, target = data.to(device), idx.to(device), target.to(device)
 
-            # Calculate Loss
-            loss = model.neg_log_likelihood(data, idx, target)
+                # Get predictions
+                score, pred = model(data, idx)
+
+                # Calculate Loss
+                loss = model.neg_log_likelihood(data, idx, target)
+
 
             total_loss += loss.item()
             for i in range(len(pred)):
@@ -267,25 +305,24 @@ def main():
     weighted_loss = weighted_loss.to(device)
     criterion = nn.CrossEntropyLoss(weight=weighted_loss)
 
-    if model_choice == 0:
-        # Hyper Parameters
-        HIDDEN_DIM = 1024
-        N_LAYERS = 1
-        LEARNING_RATE = 5e-5
-        ADAMEPS = 1e-8
-        SCHEDULER_GAMMA = 0.95
-
+    if model_architecture == "bertlstm":
         model = BERT_BiLSTM_CRF(len(posdataset.wtoi), posdataset.ttoi, HIDDEN_DIM, N_LAYERS)
         # No grad Bert layer
         for p in model.model.parameters():
             p.requires_grad = False
+    elif model_architecture == "bilstm":
+        EMBEDDING_SIZE = 256
+        model = BiLSTM_CRF(len(posdataset.wtoi), posdataset.ttoi, EMBEDDING_SIZE, HIDDEN_DIM, N_LAYERS)
 
-        model.to(device)
+    model.to(device)
 
-        optimizer = AdamW(model.parameters(
-        ), lr=LEARNING_RATE, eps=ADAMEPS)
-        scheduler = optim.lr_scheduler.ExponentialLR(
-            optimizer, SCHEDULER_GAMMA)
+    optimizer = AdamW(model.parameters(
+    ), lr=LEARNING_RATE, eps=ADAMEPS)
+    scheduler = optim.lr_scheduler.ExponentialLR(
+        optimizer, SCHEDULER_GAMMA)
+
+    model_name = f"{model_architecture}_h{HIDDEN_DIM}_n{N_LAYERS}_lr{LEARNING_RATE}"
+    print(f"Running for {model_name}")
 
     # Implement Early stop
     early_stop = 0
@@ -317,7 +354,7 @@ def main():
         if loss < best_loss:
             best_loss = loss
             torch.save(model, output_model_dir /
-                       '{}.pt'.format(models_set[model_choice]))
+                       '{}.pt'.format(model_name))
             early_stop = 0
 
         # If loss has stagnated, early stop
@@ -329,32 +366,32 @@ def main():
 
     # Plot respective graphs for visualisation
     plt.figure()
-    plt.title('{} Model Training'.format(models_set[model_choice]))
+    plt.title('{} Model Training'.format(model_name))
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
     plt.plot(train_losses)
-    plt.savefig('{}Training.png'.format(models_set[model_choice]))
+    plt.savefig('{}_Training.png'.format(model_name))
 
     plt.figure()
-    plt.title('{} Model Evaluation'.format(models_set[model_choice]))
+    plt.title('{} Model Evaluation'.format(model_name))
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
     plt.plot(eval_losses)
-    plt.savefig('{}EvalLoss.png'.format(models_set[model_choice]))
+    plt.savefig('{}_EvalLoss.png'.format(model_name))
 
     plt.figure()
-    plt.title('{} Model Evaluation'.format(models_set[model_choice]))
+    plt.title('{} Model Evaluation'.format(model_name))
     plt.xlabel('Epoch')
     plt.ylabel('Precision')
     plt.plot(eval_precision)
-    plt.savefig('{}EvalPrec.png'.format(models_set[model_choice]))
+    plt.savefig('{}_EvalPrec.png'.format(model_name))
 
     plt.figure()
-    plt.title('{} Model Evaluation'.format(models_set[model_choice]))
+    plt.title('{} Model Evaluation'.format(model_name))
     plt.xlabel('Epoch')
     plt.ylabel('Recall')
     plt.plot(eval_recall)
-    plt.savefig('{}EvalRecall.png'.format(models_set[model_choice]))
+    plt.savefig('{}_EvalRecall.png'.format(model_name))
 
 
 if __name__ == '__main__':
