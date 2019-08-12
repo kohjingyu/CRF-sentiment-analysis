@@ -7,14 +7,36 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from models import *
 import json
+import sys
+import os
 from pytorch_transformers import BertTokenizer
 
+import argparse
+
+parser = argparse.ArgumentParser(description='Run a deep learning model with CRF for POS tagging. Example usage: python3 generate_bilstm_crf_filename.py bilstm_h512_n2_lr0.001000_d0.5 --checkpoint_dir checkpoint/best')
+parser.add_argument('--arch', default="bilstm", type=str, help='')
+parser.add_argument('--dataset', default="EN", type=str, help='dataset to evaluate on (EN / ES)')
+parser.add_argument('--dataset_split', default="EN", type=str, help='dataset split to evaluate on (train / dev / test)')
+parser.add_argument('--checkpoint_dir', default="checkpoint", type=str, help='where the checkpoint files are located')
+parser.add_argument('filename', type=str, help='model checkpoint filename (without .pt)')
+
+args = parser.parse_args()
+model_name = args.filename
+dataset = args.dataset
+assert(dataset in ["EN", "ES"])
+dataset_split = args.dataset_split
+assert(dataset_split in ["train", "dev", "test"])
+model_arch = args.arch
+
+print(args)
+
 data_dir = Path("data/")
-model_dir = Path("checkpoint/")
+checkpoint_dir = Path(args.checkpoint_dir)
 use_cuda = torch.cuda.is_available()
 device = torch.device('cuda' if use_cuda else 'cpu')
-model_name = 'bertlstm'  # What models are available
-itot_file = 'itot.txt'
+ttoi_file = f'ttoi_{dataset}.txt'
+itot_file = f'itot_{dataset}.txt'
+wtoi_file = f'wtoi_{dataset}.txt'
 
 class POSGenDataset(Dataset):
     '''
@@ -26,16 +48,18 @@ class POSGenDataset(Dataset):
         dataset_choice (str): 'EN' or 'ES', defaults to 'EN'
     '''
 
-    def __init__(self, path, dataset_choice='EN'):
+    def __init__(self, path, train_wtoi, train_ttoi, dataset_choice='EN', dataset_split='dev'):
         self.path = path
         self.dataset_choice = dataset_choice
         self.dataset = []
         self.true_word = []
+        self.wtoi = train_wtoi
+        self.ttoi = train_ttoi
 
         self.tokenizer = BertTokenizer.from_pretrained(
             'bert-base-multilingual-cased', do_lower_case=False)
 
-        with open(self.path / self.dataset_choice / 'dev.in', encoding="utf-8") as f:
+        with open(self.path / self.dataset_choice / dataset_split + ".in", encoding="utf-8") as f:
             data = []
             for line in f:
                 # Strip newline
@@ -46,8 +70,16 @@ class POSGenDataset(Dataset):
                     self.true_word.append(formatted_line)
                     x = formatted_line.lower()
 
-                    data.append(x)
-
+                    if model_arch == "bilstm":
+                        # Check if word in vocab
+                        if x in self.wtoi:
+                            # Add index of word if it exist in vocab
+                            data.append(self.wtoi[x])
+                        else:
+                            # Add index of UNK if it does not
+                            data.append(self.wtoi['UNK'])
+                    else:
+                        data.append(x)
                 else:
                     # End of sentence
                     self.dataset.append(data)
@@ -58,6 +90,9 @@ class POSGenDataset(Dataset):
 
     def __getitem__(self, idx):
         data = self.dataset[idx]
+
+        if model_arch == "bilstm":
+            return torch.tensor(data).long()
 
         # Manual token to id to fit the way our dataset works
         input_ids = self.tokenizer.encode(' '.join(data))
@@ -97,41 +132,43 @@ def generate(gen_loader, model, device, split_words):
     model.eval()
     gen_tag = []
     with torch.no_grad():
-        for data, idx in gen_loader:
-            data, idx = data.to(device), idx.to(device)
-            score, pred = model(data, idx)
+        for gen_dat in gen_loader:
+            if model_arch == "bilstm":
+                data = gen_dat.to(device)
+                score, pred = model(data)
+            else:
+                data, idx = gen_dat
+                data, idx = data.to(device), idx.to(device)
+                score, pred = model(data, idx)
+
             gen_tag.append(pred)
     return gen_tag
 
 
 if __name__ == '__main__':
-    if len(sys.argv) < 2:
-        print("Usage: python generate_bilstm_crf.py modelname")
-        exit()
+    with open(ttoi_file, 'r', encoding="utf-8") as f:
+        ttoi = json.load(f)
+    with open(wtoi_file, 'r', encoding="utf-8") as f:
+        wtoi = json.load(f)
+    with open(itot_file, 'r', encoding="utf-8") as f:
+        itot = json.load(f)
 
-    model_name = sys.argv[1]
-    
     output_dir = "preds"
     if not os.path.exists(output_dir):
         os.mkdir(output_dir)
 
-    # Open indexing files
-    with open(itot_file, 'r', encoding="utf-8") as f:
-        itot = json.load(f)
-
     # Load model
-    model = torch.load(
-        model_dir / '{}.pt'.format(model_name), map_location=device)
+    model = torch.load(checkpoint_dir / '{}.pt'.format(model_name), map_location=device)
     model.to(device)
 
     SPLIT_WORDS = 'first'
 
-    posgendata = POSGenDataset(data_dir)
+    posgendata = POSGenDataset(data_dir, wtoi, ttoi, dataset_choice=dataset, dataset_split=dataset_split)
     gen_loader = DataLoader(posgendata)
 
     gen_tag = generate(gen_loader, model, device, SPLIT_WORDS)
     ctr = 0
-    with open(f'{output_dir}/{model_name}_dev.p5.out', 'w', encoding="utf-8") as f:
+    with open(f'{output_dir}/{model_name}_{dataset_split}.p5.out', 'w', encoding="utf-8") as f:
         for sentence in gen_tag:
             for i in range(len(sentence)):
                 f.write('{} {}\n'.format(

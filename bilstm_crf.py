@@ -33,7 +33,7 @@ def log_sum_exp(vec):
 
 class BiLSTM_CRF(nn.Module):
 
-    def __init__(self, vocab_size, tag_to_ix, embedding_dim, hidden_dim, n_layers):
+    def __init__(self, vocab_size, tag_to_ix, embedding_dim, hidden_dim, n_layers, dropout):
         super(BiLSTM_CRF, self).__init__()
         self.embedding_dim = embedding_dim
         self.hidden_dim = hidden_dim
@@ -44,7 +44,7 @@ class BiLSTM_CRF(nn.Module):
 
         self.word_embeds = nn.Embedding(vocab_size, embedding_dim)
         self.lstm = nn.LSTM(embedding_dim, hidden_dim,
-                            num_layers=n_layers, bidirectional=True)
+                            num_layers=n_layers, bidirectional=True, dropout=dropout)
 
         # Maps the output of the LSTM into tag space.
         self.hidden2tag = nn.Linear(hidden_dim * 2, self.tagset_size)
