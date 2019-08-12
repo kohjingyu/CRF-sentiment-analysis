@@ -1,0 +1,1 @@
+{"0": "<START>", "1": "<STOP>", "2": "O", "3": "B-negative", "4": "I-negative", "5": "B-positive", "6": "B-neutral", "7": "I-positive", "8": "I-neutral", "9": "B-conflict"}

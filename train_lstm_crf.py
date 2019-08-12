@@ -5,6 +5,7 @@ import torch.optim as optim
 from pathlib import Path
 import sys
 import os
+import time
 import random
 import matplotlib.pyplot as plt
 from models import *
@@ -21,7 +22,9 @@ parser = argparse.ArgumentParser(description='Run a deep learning model with CRF
 parser.add_argument('--hidden', default=1024, type=int, help='hidden dim of lstm')
 parser.add_argument('--nlayers', default=1, type=int, help='number of layers in the lstm')
 parser.add_argument('--lr', default=5e-5, type=float, help='learning rate for AdamW optimizer')
+parser.add_argument('--dropout', default=0.5, type=float, help='dropout probability')
 parser.add_argument('--arch', default="bertlstm", type=str, help='')
+parser.add_argument('--dataset', default="EN", type=str, help='dataset to train on (EN / ES)')
 
 args = parser.parse_args()
 print(args)
@@ -43,8 +46,10 @@ assert(model_architecture in ["bertlstm", "bilstm"])
 HIDDEN_DIM = args.hidden
 N_LAYERS = args.nlayers
 LEARNING_RATE = args.lr
+DROPOUT = args.dropout
 ADAMEPS = 1e-8
 SCHEDULER_GAMMA = 0.95
+dataset = args.dataset
 
 class POSTrainDataset(Dataset):
     '''
@@ -128,8 +133,14 @@ class POSTrainDataset(Dataset):
         self.train_data = self.dataset[:int(len(self.dataset)*split)]
         self.val_data = self.dataset[int(len(self.dataset)*split):]
 
-        with open('itot.txt', 'w', encoding="utf-8") as f:
+        with open(f'wtoi_{dataset_choice}.txt', 'w', encoding="utf-8") as f:
+            json.dump(self.wtoi, f)
+        with open(f'ttoi_{dataset_choice}.txt', 'w', encoding="utf-8") as f:
+            json.dump(self.ttoi, f)
+        with open(f'itot_{dataset_choice}.txt', 'w', encoding="utf-8") as f:
             json.dump(self.itot, f)
+        with open(f'itow_{dataset_choice}.txt', 'w', encoding="utf-8") as f:
+            json.dump(self.itow, f)
 
     def __len__(self):
         if self.train:
@@ -290,11 +301,11 @@ def eval(eval_loader, model, criterion, device, split_words):
 
 def main():
     EPOCHS = 500
-    EARLY_STOP_EPOCHS = 30
+    EARLY_STOP_EPOCHS = 5
     SPLIT_WORDS = 'first'
 
     # Init Train Dataset
-    posdataset = POSTrainDataset(data_dir, unk_chance=0)
+    posdataset = POSTrainDataset(data_dir, dataset_choice=dataset, unk_chance=0)
     loader = DataLoader(posdataset)
 
     # Criterion to for loss (weighted)
@@ -312,7 +323,7 @@ def main():
             p.requires_grad = False
     elif model_architecture == "bilstm":
         EMBEDDING_SIZE = 256
-        model = BiLSTM_CRF(len(posdataset.wtoi), posdataset.ttoi, EMBEDDING_SIZE, HIDDEN_DIM, N_LAYERS)
+        model = BiLSTM_CRF(len(posdataset.wtoi), posdataset.ttoi, EMBEDDING_SIZE, HIDDEN_DIM, N_LAYERS, DROPOUT)
 
     model.to(device)
 
@@ -321,7 +332,7 @@ def main():
     scheduler = optim.lr_scheduler.ExponentialLR(
         optimizer, SCHEDULER_GAMMA)
 
-    model_name = f"{model_architecture}_h{HIDDEN_DIM}_n{N_LAYERS}_lr{LEARNING_RATE}"
+    model_name = f"{model_architecture}_h{HIDDEN_DIM}_n{N_LAYERS}_lr{LEARNING_RATE:f}_d{DROPOUT}_{dataset}"
     print(f"Running for {model_name}")
 
     # Implement Early stop
@@ -334,6 +345,8 @@ def main():
     eval_recall = []
     eval_precision = []
     for epoch in range(1, EPOCHS+1):
+        start = time.time()
+
         scheduler.step()
         # Toggle Train set
         posdataset.train = True
@@ -347,8 +360,11 @@ def main():
         eval_losses.append(loss)
         eval_recall.append(recall)
         eval_precision.append(precision)
-        print('Epoch {}, Training Loss: {}, Evaluation Loss: {}, Evaluation Accuracy: {}, Evaluation Precision: {}, Evaluation Recall: {}'.format(
-            epoch, trainloss, loss, accuracy, precision, recall), flush=True)
+
+        time_taken = time.time() - start
+        
+        print('Epoch {}, Training Loss: {}, Evaluation Loss: {}, Evaluation Accuracy: {}, Evaluation Precision: {}, Evaluation Recall: {}, time taken: {:.3f}s'.format(
+            epoch, trainloss, loss, accuracy, precision, recall, time_taken), flush=True)
 
         # Check if current loss is better than previous
         if loss < best_loss:
