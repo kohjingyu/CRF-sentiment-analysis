@@ -81,7 +81,7 @@ We included a bash script, `grid_search.sh` that shows how to run grid search ov
 in the terminal. This runs a batch of jobs in parallel, and saves the models and results to file.
 
 ## Inference
-We also provide scripts to perform inference. Our best models are saved in `checkpoint/best/`. To use our best performing BiLSTM model for inference on the dev set, run:
+We also provide scripts to perform inference. Our best models are saved in `checkpoint/best/`. Download the models at `https://drive.google.com/drive/folders/1kOWVDXiALBays7UgKrzqMWjXdrkDz7E2?usp=sharing` To use our best performing BiLSTM model for inference on the dev set, run:
 
 ```
 python generate_bilstm_crf.py bilstm_h512_n2_lr0.001000_d0.5_EN --checkpoint_dir checkpoint/best/ --dataset EN --dataset_split dev
