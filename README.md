@@ -1,7 +1,7 @@
 # CRFs for Sentiment Analysis
 50.040 Natural Language Processing project.
 
-Authors: Change Jun Qing, Koh Jing Yu, Vincent Setiawan.
+Authors: Chang Jun Qing, Koh Jing Yu, Vincent Setiawan.
 
 ## Results
 Our results for the two datasets are located in the `output/` directory. Contained within are the following files are the outputs for the respective tasks:
@@ -48,6 +48,11 @@ ttoi_ES.txt
 wtoi_EN.txt
 wtoi_ES.txt
 ```
+
+## Running Parts 1-4
+Our part 1-4 code is located in `CRF_FinalProject.ipynb`. Markdown cells for the various parts have been created, and comments and docstrings have been added to describe each function in detail. More information is detailed in our report.
+
+To change the dataset to run the part 1-4 code on, update the first cell to set `dataset = "ES"` or `dataset = "EN"`.
 
 ## Training
 To train our BiLSTM + CRF and BERT + BiLSTM + CRF models, execute the following line in the terminal:
